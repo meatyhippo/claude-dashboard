@@ -24,6 +24,7 @@ import {
   slackText,
 } from "../shared/baCustomers.ts";
 import { getAgent, startAgent } from "./agents.ts";
+import { baseFields, sessionDataShaper } from "./baDataShaper.ts";
 import { lastQargoMcpStatus, mcpHowTo, qargoMcpStatus } from "./baQargoMcp.ts";
 import { cached, connectorCall, dropCache, FRONT_SEARCH, initConnector, markStale, NOTION_FETCH, NOTION_SELF, notionSql, parseJson, peekCache } from "./baConnector.ts";
 import { getBaFlags, setBaFlags } from "./baEdition.ts";
@@ -1137,6 +1138,22 @@ export async function handleBaRoute(req: Request, url: URL): Promise<Response | 
       return json({ text: await suggestReply(suggestMatch[1]!, context, b?.instructions ?? "") });
     }
     if (p === "/api/ba/qargo-mcp") return json(await qargoMcpStatus(refresh));
+    if (p === "/api/ba/datashaper") {
+      const r = sessionDataShaper(url.searchParams.get("session") ?? "");
+      if (!r) return json({ error: "no transcript for this session yet" }, 404);
+      // The integration request this session works on: started from its IR workspace, or named in the change.
+      const agentKey = url.searchParams.get("agent");
+      const link = agentKey ? db.query<{ ir_url: string; project_id: number | null }, [string]>("SELECT ir_url, project_id FROM ba_ir_sessions WHERE agent_key = ? LIMIT 1").get(agentKey) : null;
+      const irUrl = link?.ir_url ?? r.changes.map((c) => c.contextUrl).find((u) => !!u && /notion\.(so|com)/.test(u)) ?? null;
+      const projectId = link?.project_id ?? null;
+      const irTitle = irUrl && projectId ? ((peekCache<BaRequirement[]>(`p${projectId}:requirements`) ?? []).find((q) => q.url === irUrl)?.title ?? null) : null;
+      return json({ ...r, irUrl, irTitle, projectId });
+    }
+    if (p === "/api/ba/datashaper/base" && req.method === "POST") {
+      const b = await body<{ server?: string; tenant?: string; rowId?: string; paths?: string[] }>();
+      if (!b?.server || !b.tenant || !b.rowId || !Array.isArray(b.paths)) return json({ error: "server, tenant, rowId and paths required" }, 400);
+      return json({ fields: await baseFields(b.server, b.tenant, b.rowId, b.paths.slice(0, 200)) });
+    }
     if (p === "/api/ba/flags") {
       if (req.method === "PUT") return json({ flags: setBaFlags((await body<Partial<import("../shared/baCustomers.ts").BaFlags>>()) ?? {}) });
       return json({ flags: getBaFlags() });

@@ -1,3 +1,5 @@
+import { baFlags } from "../baFlags.ts";
+import DataShaperPanel from "./DataShaperPanel.tsx";
 import { isArtifactKey } from "../../shared/artifacts.ts";
 import { ClaudeMark } from "./Icons.tsx";
 import { isTerminalKey } from "../../shared/terminals.ts";
@@ -212,6 +214,7 @@ function SessionPanelBody({
           {agent.turns === 0 && data && turnsOf(data).length > 0 && (
             <p className="takeover-note">Earlier turns from before the dashboard took over are on the full page.</p>
           )}
+          {baFlags.qargoMcp && <DataShaperPanel sessionId={id} agentKey={agent.key} live compact />}
           <LiveConversation
             agentKey={agent.key}
             settings={settings}
@@ -270,6 +273,7 @@ function SessionPanelBody({
               {data.receipt && <Receipt receipt={data.receipt} />}
 
               <SessionArtifacts sessionId={id} />
+              {baFlags.qargoMcp && <DataShaperPanel sessionId={id} />}
 
               {data.prLinks.length > 0 && (
                 <div className="panel">

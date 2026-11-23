@@ -1,3 +1,5 @@
+import { baFlags } from "../baFlags.ts";
+import DataShaperPanel from "./DataShaperPanel.tsx";
 import { useEffect, useRef, useState } from "react";
 import {
   agentApi,
@@ -179,6 +181,8 @@ export function SessionPage({
 
       <div className={`session-cols${details ? " with-details" : ""}`}>
         <div className="session-main">
+          {/* BA edition: DataShaper changes on top of the conversation, folded while it runs */}
+          {baFlags.qargoMcp && <DataShaperPanel sessionId={id} agentKey={agent?.key ?? null} live={!!agent} compact={!!agent} />}
           {agent && priorTurns.length > 0 && (
           <div className="session-tabs" role="tablist" aria-label="Which part of the conversation">
             <button role="tab" aria-selected={pane === "live"} className={pane === "live" ? "on" : ""} onClick={() => setPane("live")}>

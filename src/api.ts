@@ -1696,6 +1696,12 @@ export const baApi = {
   reply: (id: string, r: BaReply) => post<{ ok: true; draftId?: string; to?: string[]; sent?: boolean; commented?: boolean }>(`/api/ba/mail/thread/${id}/reply`, r),
   delivery: (refresh?: boolean) => get<Cached<(BaRequirement & { projectId: number | null })[]> & { customers: BaCustomer[] }>(`/api/ba/delivery${qs(refresh)}`),
   qai: (projectId?: number | null) => get<{ questions: BaQaiQuestion[] }>(`/api/ba/qai${projectId ? `?project=${projectId}` : ""}`),
+  datashaper: (sessionId: string, agentKey?: string | null) =>
+    get<import("../shared/baDataShaper.ts").DsReport & { irUrl?: string | null; irTitle?: string | null; projectId?: number | null }>(
+      `/api/ba/datashaper?session=${encodeURIComponent(sessionId)}${agentKey ? `&agent=${encodeURIComponent(agentKey)}` : ""}`,
+    ),
+  datashaperBase: (b: { server: string; tenant: string; rowId: string; paths: string[] }) =>
+    post<{ fields: Record<string, import("../shared/baDataShaper.ts").DsLeaf | null> }>("/api/ba/datashaper/base", b),
   qargoMcp: (refresh = false) => get<{ test: string; prod: string; checkedAt: number }>(`/api/ba/qargo-mcp${refresh ? "?refresh=1" : ""}`),
   composeQai: (question: string, projectId?: number | null, irUrl?: string | null) => post<{ message: string }>("/api/ba/qai/compose", { question, projectId, irUrl }),
   askQai: (q: { question: string; message: string; projectId?: number | null; irUrl?: string | null }) => post<{ question: BaQaiQuestion }>("/api/ba/qai", q),
