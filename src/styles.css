@@ -10185,3 +10185,10 @@ body.fb-on .fb-ui, body.fb-on .fb-ui * { cursor: auto !important; }
   width: 13px; height: 13px; vertical-align: -2px; flex: none;
 }
 .rw button { display: inline-flex; align-items: center; gap: 4px; }
+
+/* BA edition: Qargo MCP connection state */
+.mcp-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #adb5bd; margin-right: 3px; vertical-align: 1px; }
+.mcp-dot.connected { background: #00e85b; }
+.mcp-dot.needs-auth { background: #f59f00; }
+.mcp-dot.failed, .mcp-dot.missing { background: #e03131; }
+.mcp-warn { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 6px 8px; margin: 4px 0 6px; border-radius: 6px; background: rgba(245, 159, 0, 0.12); border: 1px solid rgba(245, 159, 0, 0.35); }

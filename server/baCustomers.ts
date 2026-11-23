@@ -24,6 +24,7 @@ import {
   slackText,
 } from "../shared/baCustomers.ts";
 import { getAgent, startAgent } from "./agents.ts";
+import { lastQargoMcpStatus, mcpHowTo, qargoMcpStatus } from "./baQargoMcp.ts";
 import { cached, connectorCall, dropCache, FRONT_SEARCH, initConnector, markStale, NOTION_FETCH, NOTION_SELF, notionSql, parseJson, peekCache } from "./baConnector.ts";
 import { getBaFlags, setBaFlags } from "./baEdition.ts";
 import { agenda } from "./baCalendar.ts";
@@ -76,6 +77,7 @@ export function initBaCustomers(database: Database) {
   const warm = () => {
     const f = getBaFlags();
     if (f.enabled && f.inbox) void warmMail(round++).catch(() => {});
+    if (f.enabled && f.qargoMcp) void qargoMcpStatus().catch(() => {});
   };
   setTimeout(warm, 20_000);
   setInterval(warm, 10 * 60_000);
@@ -938,7 +940,9 @@ function buildAction(a: BaAction): { ok: true; cwd: string; title: string; promp
   const build = (skill: string, what: string) =>
     `${skill}\n\n${what}${a.prompt?.trim() ? `\n\nInstructions: ${a.prompt.trim()}` : ""}\n\n` +
     `Use the ${MCP[tenant]} MCP${tenant === "prod" ? " (PRODUCTION: confirm with me before every write)" : " (test tenant)"}. ` +
-    `Base the work on the integration request in Notion: read it first, and tell me what you will create before you create it.${ctx}`;
+    `Base the work on the integration request in Notion: read it first, and tell me what you will create before you create it.` +
+    mcpHowTo(MCP[tenant], lastQargoMcpStatus()?.[tenant]) +
+    ctx;
   const needsTicket = ["scope", "fill-blocks", "update-ticket", "build-integration", "build-mapping", "build-visibility"].includes(a.kind);
   if (needsTicket && !a.url && !(a.kind === "scope" && a.urls?.length)) return { ok: false, error: "no ticket" };
   if ((a.kind === "ir-from-front" || a.kind === "draft-reply" || a.kind === "mail-session") && !a.url) return { ok: false, error: "no conversation" };
@@ -1009,7 +1013,9 @@ function buildAction(a: BaAction): { ok: true; cwd: string; title: string; promp
       title: `${label}: ${(a.prompt ?? "").trim().slice(0, 40)}`,
       prompt:
         `${(a.prompt ?? "").trim()}\n\nWork from Notion: the integration request below is the source of truth. Use the relevant skills, and the ${MCP[tenant]} MCP for anything in Qargo` +
-        `${tenant === "prod" ? " (PRODUCTION: confirm with me before every write)" : ""}.${ctx}`,
+        `${tenant === "prod" ? " (PRODUCTION: confirm with me before every write)" : ""}.` +
+        mcpHowTo(MCP[tenant], lastQargoMcpStatus()?.[tenant]) +
+        ctx,
     },
   };
   const s = spec[a.kind];
@@ -1129,6 +1135,7 @@ export async function handleBaRoute(req: Request, url: URL): Promise<Response | 
         : ["Customer: not placed yet"];
       return json({ text: await suggestReply(suggestMatch[1]!, context, b?.instructions ?? "") });
     }
+    if (p === "/api/ba/qargo-mcp") return json(await qargoMcpStatus(refresh));
     if (p === "/api/ba/flags") {
       if (req.method === "PUT") return json({ flags: setBaFlags((await body<Partial<import("../shared/baCustomers.ts").BaFlags>>()) ?? {}) });
       return json({ flags: getBaFlags() });

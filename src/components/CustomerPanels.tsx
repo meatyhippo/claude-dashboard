@@ -265,6 +265,11 @@ function IrWorkspace({
   const { state, busy, refresh } = useCached<BaTicket>((r) => baApi.ticket(req.url, r), [req.url]);
   const [sessions, setSessions] = useState<(BaIrSession & { status: string | null })[]>([]);
   const [tenant, setTenant] = useState<BaTenant>("test");
+  const [mcp, setMcp] = useState<{ test: string; prod: string } | null>(null);
+  const checkMcp = (refresh = false) => void baApi.qargoMcp(refresh).then(setMcp).catch(() => {});
+  useEffect(() => {
+    if (baFlags.qargoMcp) checkMcp();
+  }, []);
   const [prompt, setPrompt] = useState("");
   const [showTicket, setShowTicket] = useState(false);
   const loadSessions = useCallback(() => void baApi.irSessions(req.url).then((r) => setSessions(r.sessions)).catch(() => {}), [req.url]);
@@ -317,11 +322,23 @@ function IrWorkspace({
             <span className="ba-seg" role="radiogroup" aria-label="Tenant">
               {(["test", "prod"] as const).map((x) => (
                 <button key={x} role="radio" aria-checked={tenant === x} className={tenant === x ? "on" : ""} onClick={() => setTenant(x)}>
-                  {x === "test" ? "Test MCP" : "Prod MCP"}
+                  <span className={`mcp-dot ${mcp?.[x] ?? "unknown"}`} /> {x === "test" ? "Test MCP" : "Prod MCP"}
                 </button>
               ))}
             </span>
           </h4>
+          {mcp && mcp[tenant] !== "connected" && mcp[tenant] !== "unknown" && (
+            <div className="mcp-warn">
+              {mcp[tenant] === "needs-auth"
+                ? `The ${tenant} Qargo MCP is not signed in. Sign in once in claude.ai → Settings → Connectors (qargo-mcp-${tenant}), or start the session anyway: it will give you the sign-in link first.`
+                : mcp[tenant] === "missing"
+                  ? `The ${tenant} Qargo MCP is not among your connectors. Add qargo-mcp-${tenant} in claude.ai → Settings → Connectors.`
+                  : `The ${tenant} Qargo MCP did not answer the last check.`}
+              <button className="icon-btn ghost" onClick={() => checkMcp(true)}>
+                Check again
+              </button>
+            </div>
+          )}
           <div className="ba-row">
             <button className="icon-btn" onClick={() => build("build-integration")}>
               Create integration

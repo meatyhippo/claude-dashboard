@@ -1696,6 +1696,7 @@ export const baApi = {
   reply: (id: string, r: BaReply) => post<{ ok: true; draftId?: string; to?: string[]; sent?: boolean; commented?: boolean }>(`/api/ba/mail/thread/${id}/reply`, r),
   delivery: (refresh?: boolean) => get<Cached<(BaRequirement & { projectId: number | null })[]> & { customers: BaCustomer[] }>(`/api/ba/delivery${qs(refresh)}`),
   qai: (projectId?: number | null) => get<{ questions: BaQaiQuestion[] }>(`/api/ba/qai${projectId ? `?project=${projectId}` : ""}`),
+  qargoMcp: (refresh = false) => get<{ test: string; prod: string; checkedAt: number }>(`/api/ba/qargo-mcp${refresh ? "?refresh=1" : ""}`),
   composeQai: (question: string, projectId?: number | null, irUrl?: string | null) => post<{ message: string }>("/api/ba/qai/compose", { question, projectId, irUrl }),
   askQai: (q: { question: string; message: string; projectId?: number | null; irUrl?: string | null }) => post<{ question: BaQaiQuestion }>("/api/ba/qai", q),
   qaiToday: (refresh?: boolean) => get<{ data: { author: string; text: string; at: string | null; fromQai: boolean }[]; error: string | null }>(`/api/ba/qai/today${qs(refresh)}`),
