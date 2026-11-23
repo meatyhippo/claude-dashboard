@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { getBaModels } from "./baEdition.ts";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import type { Cached } from "../shared/baCustomers.ts";
 import { claudeEnv, SCRATCH_DIR } from "./paths.ts";
@@ -30,11 +31,13 @@ export function initConnector(database: Database) {
   db.exec(`CREATE TABLE IF NOT EXISTS ba_cache (key TEXT PRIMARY KEY, json TEXT, error TEXT, fetched_at INTEGER NOT NULL);`);
 }
 
-/** One exact tool call; Haiku first, Sonnet if that fails. Returns the tool's raw result text. */
+/** One exact tool call on the sync model (Haiku by default), retried on Sonnet if allowed. Returns the tool's raw result text. */
 export async function connectorCall(tool: string, input: unknown, reason: string): Promise<string> {
   mkdirSync(SCRATCH_DIR, { recursive: true });
   let lastError = "no result";
-  for (const model of ["haiku", "sonnet"]) {
+  const m = getBaModels();
+  const models = [...new Set([m.sync, ...(m.syncFallback ? ["sonnet"] : [])])];
+  for (const model of models) {
     try {
       const out = await oneCall(model, tool, input, reason);
       if (out !== null) return out;
@@ -150,7 +153,7 @@ async function batchInner<I>(tool: string, inputs: I[], keyOf: (input: I) => str
     options: {
       env: claudeEnv(),
       cwd: SCRATCH_DIR,
-      model: "haiku",
+      model: getBaModels().sync,
       maxTurns: 6,
       persistSession: false,
       settingSources: ["user"],

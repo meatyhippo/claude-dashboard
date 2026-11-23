@@ -1,4 +1,4 @@
-import SessionContextPane from "./SessionContextPane.tsx";
+import SessionContextPane, { useScxPos } from "./SessionContextPane.tsx";
 import { baFlags } from "../baFlags.ts";
 import DataShaperPanel from "./DataShaperPanel.tsx";
 import { isArtifactKey } from "../../shared/artifacts.ts";
@@ -129,6 +129,7 @@ function SessionPanelBody({
 }) {
   const [data, setData] = useState<SessionDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [scxPos] = useScxPos();
   // The drawer/tile itself is the scroll container for a read-only session, so
   // opening one lands on the latest exchange rather than the top of the history.
   useJumpToEnd(scrollRef, !agent && !!data, id);
@@ -215,15 +216,33 @@ function SessionPanelBody({
           {agent.turns === 0 && data && turnsOf(data).length > 0 && (
             <p className="takeover-note">Earlier turns from before the dashboard took over are on the full page.</p>
           )}
-          {baFlags.customers && <SessionContextPane sessionId={id} agentKey={agent.key} cwd={cwd} />}
-          {baFlags.qargoMcp && <DataShaperPanel sessionId={id} agentKey={agent.key} live compact />}
-          <LiveConversation
-            agentKey={agent.key}
-            settings={settings}
-            onSettings={onSettings}
-            onGone={onClose}
-            scrollJumpVariant={jumpVariant === "compact" ? "compact" : "float"}
-          />
+          {baFlags.customers ? (
+            // BA edition: the pane beside the chat, left, right or above it as set in its header.
+            <div className={`scx-host ctx-${scxPos}`}>
+              <SessionContextPane sessionId={id} agentKey={agent.key} cwd={cwd} />
+              <div className="scx-chat">
+                {baFlags.qargoMcp && <DataShaperPanel sessionId={id} agentKey={agent.key} live compact />}
+                <LiveConversation
+                  agentKey={agent.key}
+                  settings={settings}
+                  onSettings={onSettings}
+                  onGone={onClose}
+                  scrollJumpVariant={jumpVariant === "compact" ? "compact" : "float"}
+                />
+              </div>
+            </div>
+          ) : (
+            <>
+              {baFlags.qargoMcp && <DataShaperPanel sessionId={id} agentKey={agent.key} live compact />}
+              <LiveConversation
+                agentKey={agent.key}
+                settings={settings}
+                onSettings={onSettings}
+                onGone={onClose}
+                scrollJumpVariant={jumpVariant === "compact" ? "compact" : "float"}
+              />
+            </>
+          )}
         </>
       ) : (
         <>

@@ -1,4 +1,4 @@
-import { mailStyleBlock } from "./baEdition.ts";
+import { getBaModels, mailStyleBlock } from "./baEdition.ts";
 import type { BaFrontThread, BaMailEntry, BaMailThread, BaMailView, BaReply, BaTriageThread, Cached } from "../shared/baCustomers.ts";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { cached, connectorBatch, connectorCall, FRONT_SEARCH, parseJson, peekCache, recordShape } from "./baConnector.ts";
@@ -299,6 +299,7 @@ export function withThreadInfo(t: BaFrontThread): BaFrontThread {
     emails,
     snippet: t.snippet ?? (last?.text ? last.text.replace(/\s+/g, " ").slice(0, 180) : null),
     updatedAt: t.updatedAt ?? last?.at ?? null,
+    lastBy: last ? (last.inbound ? "them" : "us") : null,
   };
 }
 
@@ -389,7 +390,7 @@ export async function suggestReply(id: string, context: string[], instructions: 
   setTimeout(() => stop.abort(), 120_000);
   const q = query({
     prompt: `<conversation>\n${threadAsText(th)}\n</conversation>\n\n<context>\n${context.join("\n")}\n</context>\n\n${instructions.trim() ? `What the reply should say: ${instructions.trim()}` : "Draft the reply."}`,
-    options: { env: claudeEnv(), cwd: SCRATCH_DIR, model: "sonnet", systemPrompt: REPLY_SYSTEM + mailStyleBlock(), maxTurns: 1, tools: [], mcpServers: {}, settingSources: [], persistSession: false, abortController: stop },
+    options: { env: claudeEnv(), cwd: SCRATCH_DIR, model: getBaModels().drafts, systemPrompt: REPLY_SYSTEM + mailStyleBlock(), maxTurns: 1, tools: [], mcpServers: {}, settingSources: [], persistSession: false, abortController: stop },
   });
   try {
     for await (const msg of q as AsyncIterable<any>) {
@@ -423,7 +424,7 @@ export async function keyPoints(id: string): Promise<KeyPoints> {
     setTimeout(() => stop.abort(), 120_000);
     const q = query({
       prompt: `<conversation>\n${threadAsText(th, 10_000)}\n</conversation>`,
-      options: { env: claudeEnv(), cwd: SCRATCH_DIR, model: "haiku", systemPrompt: KEY_SYSTEM, maxTurns: 1, tools: [], mcpServers: {}, settingSources: [], persistSession: false, abortController: stop },
+      options: { env: claudeEnv(), cwd: SCRATCH_DIR, model: getBaModels().keyPoints, systemPrompt: KEY_SYSTEM, maxTurns: 1, tools: [], mcpServers: {}, settingSources: [], persistSession: false, abortController: stop },
     });
     for await (const msg of q as AsyncIterable<any>) {
       if (msg.type === "result") {

@@ -78,6 +78,8 @@ export type BaFrontThread = {
   snippet: string | null;
   updatedAt: number | null;
   link: string;
+  /** Who wrote the last message: "us" (replied, waiting on them) or "them" (needs a reply). Known once the timeline is read. */
+  lastBy?: "us" | "them" | null;
 };
 
 export type BaSuggestion = { projectId: number; irUrl: string | null; irTitle: string | null; reason: string; score: number };
@@ -406,3 +408,22 @@ export type BaSavedFiles = { dir: string; saved: string[]; skipped: number } | n
 // ── Slack, on the customer page ──────────────────────────────────────────────
 
 export type BaSlackPost = { author: string; text: string; at: string | null; fromQai: boolean };
+
+/** Which model each kind of background work uses, and how often the mailbox refreshes. */
+export type BaModel = "haiku" | "sonnet" | "opus";
+export type BaModels = {
+  /** Connector reads (Notion, Front, Slack, Calendar): one exact tool call each. */
+  sync: BaModel;
+  /** Retry a failed read once on Sonnet. */
+  syncFallback: boolean;
+  /** Key points of a mail thread. */
+  keyPoints: BaModel;
+  /** "Draft with Claude" replies in the Inbox. */
+  drafts: BaModel;
+  /** Sessions started from BA buttons; "default" uses your Claude Code default. */
+  sessions: BaModel | "default";
+  /** Minutes between background mailbox refreshes; 0 is only when you open the Inbox. */
+  refreshMinutes: number;
+};
+export const DEFAULT_BA_MODELS: BaModels = { sync: "haiku", syncFallback: true, keyPoints: "haiku", drafts: "sonnet", sessions: "default", refreshMinutes: 10 };
+export const BA_REFRESH_CHOICES = [0, 5, 10, 30, 60];

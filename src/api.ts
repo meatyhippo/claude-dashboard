@@ -1696,6 +1696,8 @@ export const baApi = {
   reply: (id: string, r: BaReply) => post<{ ok: true; draftId?: string; to?: string[]; sent?: boolean; commented?: boolean }>(`/api/ba/mail/thread/${id}/reply`, r),
   delivery: (refresh?: boolean) => get<Cached<(BaRequirement & { projectId: number | null })[]> & { customers: BaCustomer[] }>(`/api/ba/delivery${qs(refresh)}`),
   qai: (projectId?: number | null) => get<{ questions: BaQaiQuestion[] }>(`/api/ba/qai${projectId ? `?project=${projectId}` : ""}`),
+  models: () => get<import("../shared/baCustomers.ts").BaModels>("/api/ba/models"),
+  saveModels: (patch: Partial<import("../shared/baCustomers.ts").BaModels>) => put<import("../shared/baCustomers.ts").BaModels>("/api/ba/models", patch),
   mailStyle: () => get<{ text: string; block: string }>("/api/ba/mail-style"),
   saveMailStyle: (text: string) => put<{ text: string }>("/api/ba/mail-style", { text }),
   sessionContext: (sessionId: string, agentKey?: string | null, cwd?: string | null) =>

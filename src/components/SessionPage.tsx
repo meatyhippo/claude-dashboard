@@ -1,4 +1,4 @@
-import SessionContextPane from "./SessionContextPane.tsx";
+import SessionContextPane, { useScxPos } from "./SessionContextPane.tsx";
 import { baFlags } from "../baFlags.ts";
 import DataShaperPanel from "./DataShaperPanel.tsx";
 import { useEffect, useRef, useState } from "react";
@@ -54,6 +54,7 @@ export function SessionPage({
   onOpenWorkspace?: (workspace: Workspace) => void;
 }) {
   const [details, setDetails] = useState(false);
+  const [scxPos] = useScxPos();
   const [pane, setPane] = useState<"live" | "earlier">("live");
   useEffect(() => setPane("live"), [id]);
   const [data, setData] = useState<SessionDetail | null>(null);
@@ -180,7 +181,7 @@ export function SessionPage({
       {error && <div className="empty">{error}</div>}
       {!agent && live && <ExternalNotice />}
 
-      <div className={`session-cols${details ? " with-details" : ""}${baFlags.customers ? " with-context" : ""}`}>
+      <div className={`session-cols${details ? " with-details" : ""}${baFlags.customers ? ` with-context ctx-${scxPos}` : ""}`}>
         <div className="session-main">
           {/* BA edition: DataShaper changes on top of the conversation, folded while it runs */}
           {baFlags.qargoMcp && <DataShaperPanel sessionId={id} agentKey={agent?.key ?? null} live={!!agent} compact={!!agent} />}

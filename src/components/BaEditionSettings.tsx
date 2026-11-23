@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { baApi } from "../api.ts";
-import { BA_FLAG_INFO, type BaFlags } from "../../shared/baCustomers.ts";
+import { BA_FLAG_INFO, BA_REFRESH_CHOICES, type BaFlags, type BaModels } from "../../shared/baCustomers.ts";
 import { baRawFlags, saveBaFlags } from "../baFlags.ts";
 
 /**
@@ -50,7 +50,70 @@ export default function BaEditionSettings() {
           {saving ? "Saving…" : "Save and reload"}
         </button>
       </div>
+      {baRawFlags.enabled && <Models />}
       {baRawFlags.enabled && <MailStyle />}
+    </div>
+  );
+}
+
+const MODEL_LABEL: Record<string, string> = { haiku: "Haiku (cheapest)", sonnet: "Sonnet", opus: "Opus (most capable)", default: "Your Claude Code default" };
+
+/** Which model background work uses, and how often it runs: lower is cheaper and lighter on your usage. */
+function Models() {
+  const [m, setM] = useState<BaModels | null>(null);
+  const [err, setErr] = useState(false);
+  useEffect(() => {
+    void baApi.models().then(setM).catch(() => setErr(true));
+  }, []);
+  if (!m) return null;
+  const save = (patch: Partial<BaModels>) => {
+    setM({ ...m, ...patch });
+    void baApi.saveModels(patch).then(setM).catch(() => setErr(true));
+  };
+  const pick = (key: "sync" | "keyPoints" | "drafts" | "sessions", label: string, hint: string, withDefault = false) => (
+    <label className="ba-model-row">
+      <span>
+        <strong>{label}</strong>
+        <span className="hint">{hint}</span>
+      </span>
+      <select value={m[key]} onChange={(e) => save({ [key]: e.target.value } as Partial<BaModels>)}>
+        {[...(withDefault ? ["default"] : []), "haiku", "sonnet", "opus"].map((v) => (
+          <option key={v} value={v}>
+            {MODEL_LABEL[v]}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+  return (
+    <div className="ba-models">
+      <h3>Models and refresh</h3>
+      <p className="hint">Background reads only copy what a connector returns, so the smallest model does them well. Use a bigger model where Claude writes or thinks.</p>
+      {pick("sync", "Syncs", "Notion, Front, Slack and Calendar reads: one exact tool call each")}
+      <label className="ba-model-row">
+        <span>
+          <strong>Retry on Sonnet</strong>
+          <span className="hint">When a read fails on the sync model, try once more on Sonnet</span>
+        </span>
+        <input type="checkbox" checked={m.syncFallback} onChange={(e) => save({ syncFallback: e.target.checked })} />
+      </label>
+      <label className="ba-model-row">
+        <span>
+          <strong>Background refresh</strong>
+          <span className="hint">How often the mailbox is read while the app runs</span>
+        </span>
+        <select value={m.refreshMinutes} onChange={(e) => save({ refreshMinutes: Number(e.target.value) })}>
+          {BA_REFRESH_CHOICES.map((n) => (
+            <option key={n} value={n}>
+              {n === 0 ? "Off: only when I open the Inbox" : `Every ${n} minutes`}
+            </option>
+          ))}
+        </select>
+      </label>
+      {pick("keyPoints", "Key points", "The summary above a mail thread")}
+      {pick("drafts", "Reply drafts", "Draft with Claude in the Inbox")}
+      {pick("sessions", "BA sessions", "Sessions started from customer, IR and mail buttons", true)}
+      {err && <div className="chat-error">Could not save. Is the dashboard's service running?</div>}
     </div>
   );
 }

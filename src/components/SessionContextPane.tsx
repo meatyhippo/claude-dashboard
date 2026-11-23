@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { BaCustomer, BaTicket } from "../../shared/baCustomers.ts";
+import type { BaCustomer, BaRequirement, BaTicket } from "../../shared/baCustomers.ts";
 import { agentApi, baApi, type TimelineItem } from "../api.ts";
 import { Reader } from "./InboxView.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { fileTab, Workbench } from "./workbench/Workbench.tsx";
+import { StatusPill } from "./StatusPill.tsx";
 
 /**
  * BA edition: what a session works on, beside its chat. The mail (with a reply
@@ -14,7 +15,47 @@ import { fileTab, Workbench } from "./workbench/Workbench.tsx";
  */
 
 type Ctx = Awaited<ReturnType<typeof baApi.sessionContext>>;
-type Tab = "mail" | "ticket" | "files";
+type Tab = "mail" | "ticket" | "changes" | "files";
+
+/** Where the pane sits next to the chat: remembered per viewer, shared by every session. */
+export type ScxPos = "right" | "left" | "top";
+const POS_KEY = "ba-scx-pos";
+const readPos = (): ScxPos => {
+  try {
+    const v = localStorage.getItem(POS_KEY);
+    return v === "left" || v === "top" || v === "right" ? v : "right";
+  } catch {
+    return "right";
+  }
+};
+export function useScxPos(): [ScxPos, (p: ScxPos) => void] {
+  const [pos, setPos] = useState<ScxPos>(readPos);
+  useEffect(() => {
+    const on = () => setPos(readPos());
+    window.addEventListener("ba-scx-pos", on);
+    return () => window.removeEventListener("ba-scx-pos", on);
+  }, []);
+  return [
+    pos,
+    (p) => {
+      try {
+        localStorage.setItem(POS_KEY, p);
+      } catch {
+        /* not remembered: still applies until reload */
+      }
+      window.dispatchEvent(new Event("ba-scx-pos"));
+    },
+  ];
+}
+
+const PosIcon = ({ p }: { p: ScxPos }) => (
+  <svg width="16" height="12" viewBox="0 0 16 12" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden>
+    <rect x="0.65" y="0.65" width="14.7" height="10.7" rx="1.5" />
+    {p === "left" && <rect x="1.5" y="1.5" width="5" height="9" fill="currentColor" stroke="none" />}
+    {p === "right" && <rect x="9.5" y="1.5" width="5" height="9" fill="currentColor" stroke="none" />}
+    {p === "top" && <rect x="1.5" y="1.5" width="13" height="4" fill="currentColor" stroke="none" />}
+  </svg>
+);
 
 const DRAFT = /<draft>([\s\S]*?)<\/draft>/i;
 const NOTION_WRITE = /notion-(update-page|create-pages|update-data-source)|notion__(update|create)/i;
@@ -42,6 +83,8 @@ export default function SessionContextPane({ agentKey, sessionId, cwd, wide }: {
   const [ticketAt, setTicketAt] = useState<number | null>(null);
   const firstBlocks = useRef<Set<string> | null>(null);
   const [wbTab, setWbTab] = useState("session");
+  const [pos, setPos] = useScxPos();
+  const [reqs, setReqs] = useState<BaRequirement[] | null>(null);
 
   useEffect(() => {
     void baApi
@@ -53,6 +96,15 @@ export default function SessionContextPane({ agentKey, sessionId, cwd, wide }: {
       .catch(() => {});
     void baApi.customers().then((r) => setCustomers(r.customers)).catch(() => {});
   }, [sessionId, agentKey, cwd]);
+
+  // The customer's change requests: the ones this session or its mail mention come first.
+  useEffect(() => {
+    if (ctx?.projectId == null) return;
+    void baApi
+      .requirements(ctx.projectId)
+      .then((r) => setReqs((r.data ?? []).filter((t) => t.type === "Change request")))
+      .catch(() => setReqs([]));
+  }, [ctx?.projectId]);
 
   // The live session's timeline: drafts it writes, Notion writes and files it touches.
   useEffect(() => {
@@ -124,10 +176,31 @@ export default function SessionContextPane({ agentKey, sessionId, cwd, wide }: {
     return out;
   }, [timeline, ctx?.folder]);
 
+  /** Change requests, linked ones first: named in the session, on its mail thread, or the session's own ticket. */
+  const changes = useMemo(() => {
+    if (!reqs) return [];
+    const said = JSON.stringify(timeline).replace(/-/g, "");
+    const idOf = (url: string) => url.replace(/-/g, "").match(/[0-9a-f]{32}/i)?.[0]?.toLowerCase() ?? url;
+    const irId = ctx?.irUrl ? idOf(ctx.irUrl) : null;
+    return reqs
+      .map((t) => {
+        const id = idOf(t.url);
+        const why =
+          id === irId ? "this session's ticket" : ctx?.thread && t.frontLink?.includes(ctx.thread.id) ? "on this mail" : said.toLowerCase().includes(id) ? "named in this session" : null;
+        return { t, why, open: !/done|live|closed|won.?t|duplicate|cancel/i.test(t.status ?? "") };
+      })
+      .filter((x) => x.why || x.open)
+      .sort((a, b) => Number(!!b.why) - Number(!!a.why) || Number(b.open) - Number(a.open));
+  }, [reqs, timeline, ctx?.irUrl, ctx?.thread]);
+  const linkedChanges = changes.filter((c) => c.why).length;
+
   if (!ctx || !tab) return null;
+  const side = pos !== "top";
+  const isOpen = open || side;
   const tabs: { key: Tab; label: string; count?: string }[] = [
     ...(ctx.thread ? [{ key: "mail" as const, label: "Mail" }] : []),
     ...(ctx.irUrl ? [{ key: "ticket" as const, label: "Ticket", count: changed.size ? `${changed.size} changed` : undefined }] : []),
+    ...(ctx.projectId != null && reqs ? [{ key: "changes" as const, label: "Change requests", count: linkedChanges ? `${linkedChanges} linked` : changes.length ? String(changes.length) : undefined }] : []),
     ...(ctx.folder ? [{ key: "files" as const, label: "Files", count: touched.size ? `${touched.size} touched` : undefined }] : []),
   ];
 
@@ -148,9 +221,9 @@ export default function SessionContextPane({ agentKey, sessionId, cwd, wide }: {
   };
 
   return (
-    <aside className={`scx ${wide ? "wide" : "narrow"} ${open ? "open" : ""}`} aria-label="What this session works on">
+    <aside className={`scx ${wide ? "wide" : "narrow"} ${isOpen ? "open" : ""} pos-${pos}`} aria-label="What this session works on">
       <div className="scx-tabs" role="tablist">
-        {!wide && (
+        {!wide && !side && (
           <button className="scx-fold" onClick={() => setOpen(!open)} aria-expanded={open} title={open ? "Fold" : "Show beside the chat"}>
             {open ? "▾" : "▸"}
           </button>
@@ -171,9 +244,16 @@ export default function SessionContextPane({ agentKey, sessionId, cwd, wide }: {
           </button>
         ))}
         <span className="scx-who">{ctx.customer ?? ""}</span>
+        <span className="scx-pos" role="group" aria-label="Where this pane sits">
+          {(["left", "top", "right"] as const).map((p) => (
+            <button key={p} className={pos === p ? "on" : ""} aria-pressed={pos === p} title={p === "top" ? "Above the chat" : `To the ${p} of the chat`} onClick={() => setPos(p)}>
+              <PosIcon p={p} />
+            </button>
+          ))}
+        </span>
       </div>
 
-      {open && tab === "mail" && ctx.thread && (
+      {isOpen && tab === "mail" && ctx.thread && (
         <div className="scx-body scx-mail">
           <Reader
             t={ctx.thread}
@@ -185,7 +265,7 @@ export default function SessionContextPane({ agentKey, sessionId, cwd, wide }: {
         </div>
       )}
 
-      {open && tab === "ticket" && ctx.irUrl && (
+      {isOpen && tab === "ticket" && ctx.irUrl && (
         <div className="scx-body scx-ticket">
           <div className="scx-ticket-head">
             <strong>{ticket?.title ?? ctx.irTitle ?? "Integration request"}</strong>
@@ -209,7 +289,43 @@ export default function SessionContextPane({ agentKey, sessionId, cwd, wide }: {
         </div>
       )}
 
-      {open && tab === "files" && ctx.folder && (
+      {isOpen && tab === "changes" && (
+        <div className="scx-body scx-changes">
+          {changes.length === 0 && <p className="ba-muted">No open change requests at {ctx.customer ?? "this customer"}.</p>}
+          {changes.map(({ t, why }) => (
+            <div key={t.url} className={`scx-cr ${why ? "linked" : ""}`}>
+              <div className="scx-cr-main">
+                <a href={t.url} target="_blank" rel="noreferrer">
+                  {t.title}
+                </a>
+                <span className="scx-cr-meta">
+                  <StatusPill status={t.status ?? "No status"} />
+                  {t.billableStatus && <StatusPill status={t.billableStatus} billable />}
+                  {t.billableAmount ? <span className="ba-muted">{t.billableAmount.toLocaleString()}</span> : null}
+                  {why && <span className="ba-chip">{why}</span>}
+                </span>
+              </div>
+              {agentKey && !why && (
+                <button className="icon-btn ghost" title="Tell the session this work belongs to this change request" onClick={() => void agentApi.message(agentKey, `This work belongs to the change request "${t.title}" (${t.url}). Read it and keep it in mind; update it in Notion only when I ask.`)}>
+                  Link
+                </button>
+              )}
+            </div>
+          ))}
+          {agentKey && (
+            <button
+              className="icon-btn"
+              onClick={() =>
+                void agentApi.message(agentKey, `Based on what we found in this session, prepare a change request for ${ctx.customer ?? "this customer"} with the create-change-request skill${ctx.thread ? `, linked to the Front conversation ${ctx.thread.link}` : ""}. Show me the draft before you create it in Notion.`)
+              }
+            >
+              New change request from this session
+            </button>
+          )}
+        </div>
+      )}
+
+      {isOpen && tab === "files" && ctx.folder && (
         <div className="scx-body scx-files">
           <Workbench
             workspaceId={-(500000 + (ctx.projectId ?? 0))}
