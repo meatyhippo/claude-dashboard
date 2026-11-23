@@ -274,9 +274,13 @@ const NOTIFY_KINDS: NotifyEventKind[] = [
   "calendarStarting",
 ];
 import { sessionReceipt, usageSummary } from "./usage.ts";
+import { applyBaEditionOnce } from "./baEdition.ts";
+import { dropConnectorCalendar, withConnectorStatus } from "./baCalendar.ts";
+import { handleBaRoute, initBaCustomers } from "./baCustomers.ts";
 
 const cfg = loadConfig();
 const settings = loadSettings();
+applyBaEditionOnce();
 const db = openDb();
 
 // Budgets are read once at startup; printing them makes a stale config obvious
@@ -375,6 +379,7 @@ applyArtifactsRoot(settings.ui.artifactsRoot);
   console.log(`[claude-dashboard] artifacts folder: ${artifactsDir()}`);
 }
 initDrawings(db);
+initBaCustomers(db);
 initNotes(db);
 setNotesDir(settings.ui.notesRoot ?? "");
 reconcileNotes();
@@ -1088,6 +1093,8 @@ const server = Bun.serve<PtyData, never>({
   async fetch(req): Promise<Response | undefined> {
     const url = new URL(req.url);
     const p = url.pathname;
+    const ba = await handleBaRoute(req, url);
+    if (ba) return ba;
 
     if (p === "/pty") {
       const cols = Number(url.searchParams.get("cols")) || 120;
@@ -1365,7 +1372,7 @@ const server = Bun.serve<PtyData, never>({
         }),
       });
     }
-    if (p === "/api/calendar" && req.method === "GET") return json(await macCalendarStatus());
+    if (p === "/api/calendar" && req.method === "GET") return json(withConnectorStatus(await macCalendarStatus()));
     if (p === "/api/calendar/enable" && req.method === "POST") {
       try {
         return json(await enableMacCalendar());
@@ -1426,6 +1433,7 @@ const server = Bun.serve<PtyData, never>({
     if (p === "/api/calendar/refresh" && req.method === "POST") {
       try {
         invalidateCalendar();
+        dropConnectorCalendar();
         return json({ changed: await refreshMacCalendar() });
       } catch (e) {
         return json({ error: (e as Error).message }, 502);

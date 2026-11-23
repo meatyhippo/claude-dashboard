@@ -1,3 +1,4 @@
+import { baFlags } from "../baFlags.ts";
 import { useEffect, useState } from "react";
 import { dirApi, gitApi, shortPath, type Favourite, type RepoStatus, type Worktree } from "../api.ts";
 import { BranchPicker, type BranchChoice } from "./BranchPicker.tsx";
@@ -284,6 +285,28 @@ export function LocationFields({
           <span className="folder-name">Other path…</span>
           <span className="folder-sub">type or paste it</span>
         </button>
+        {baFlags.enabled && <button
+          type="button"
+          className="folder-card pick dashed"
+          title="Pick the folder in the macOS dialog"
+          onClick={() =>
+            void fetch("/api/ba/choose-folder", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ from: cwd || undefined }) })
+              .then((r) => r.json() as Promise<{ path?: string | null }>)
+              .then((r) => {
+                if (!r.path) return;
+                loc.setCwd(r.path);
+                loc.setCustom(true);
+                loc.setResearch(false);
+              })
+              .catch(() => {})
+          }
+        >
+          <span className="folder-ic">
+            <FolderIcon open={false} />
+          </span>
+          <span className="folder-name">Choose in Finder…</span>
+          <span className="folder-sub">the macOS folder dialog</span>
+        </button>}
       </div>
 
       {custom && !research && (

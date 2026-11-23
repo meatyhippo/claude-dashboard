@@ -1,9 +1,11 @@
 import { RefreshIcon, SaveIcon } from "./Icons.tsx";
+import { baFlags } from "../baFlags.ts";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Excalidraw, exportToSvg, restore, serializeAsJSON } from "@excalidraw/excalidraw";
 import "@excalidraw/excalidraw/index.css";
 import { drawingApi } from "../api.ts";
 import { DRAWINGS_CHANGED, type DrawingsChange } from "./drawingEvents.ts";
+import QargoDiagramTools, { qargoLibraryItems } from "./QargoDiagramTools.tsx";
 
 type Api = Parameters<NonNullable<React.ComponentProps<typeof Excalidraw>["excalidrawAPI"]>>[0];
 type Initial = NonNullable<Exclude<React.ComponentProps<typeof Excalidraw>["initialData"], Promise<unknown> | (() => unknown)>>;
@@ -38,8 +40,9 @@ function useAppTheme(): "light" | "dark" {
  * because an agent redrew it, the canvas follows unless you have changes of your
  * own waiting, in which case you are asked which side wins.
  */
-export default function DrawingCanvas({ slug, onState }: { slug: string; onState?: (state: "saved" | "saving" | "error") => void }) {
+export default function DrawingCanvas({ slug, title, onState }: { slug: string; title?: string; onState?: (state: "saved" | "saving" | "error") => void }) {
   const theme = useAppTheme();
+  const [api, setApi] = useState<Api | null>(null);
   const [initial, setInitial] = useState<Initial | null>(null);
   const [missing, setMissing] = useState(false);
   const [conflict, setConflict] = useState<string | null>(null);
@@ -65,7 +68,7 @@ export default function DrawingCanvas({ slug, onState }: { slug: string; onState
       hash.current = nextHash;
       savedStamp.current = stampOf(data.elements, data.files ?? {}, data.appState.viewBackgroundColor ?? "");
       latest.current = null;
-      setInitial({ elements: data.elements, appState: { ...data.appState, collaborators: new Map() }, files: data.files, scrollToContent: true });
+      setInitial({ elements: data.elements, appState: { ...data.appState, collaborators: new Map() }, files: data.files, scrollToContent: true, ...(baFlags.diagrams ? { libraryItems: qargoLibraryItems() } : {}) });
       setConflict(null);
       setMounts((n) => n + 1);
     },
@@ -199,9 +202,11 @@ export default function DrawingCanvas({ slug, onState }: { slug: string; onState
         </div>
       )}
       {error && <div className="chat-error">{error}</div>}
+      {baFlags.diagrams && <QargoDiagramTools api={api} title={title} />}
       <div className="drawing-stage">
         <Excalidraw
           key={mounts}
+          excalidrawAPI={setApi}
           initialData={initial}
           onChange={onChange}
           theme={theme}

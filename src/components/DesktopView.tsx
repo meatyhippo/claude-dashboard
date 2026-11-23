@@ -1,3 +1,5 @@
+import DesktopWidgets from "./DesktopWidgets.tsx";
+import { baFlags } from "../baFlags.ts";
 import { NineDotsIcon } from "./Icons.tsx";
 
 /**
@@ -11,6 +13,7 @@ import { NineDotsIcon } from "./Icons.tsx";
 export function DesktopView() {
   return (
     <div className="desktop-view">
+      {baFlags.enabled && <DesktopWidgets />}
       <div className="desktop-hint">
         <NineDotsIcon />
         <p>

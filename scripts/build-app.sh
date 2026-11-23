@@ -82,6 +82,8 @@ cat > "$DAEMON/package.json" <<JSON
 JSON
 (cd "$DAEMON" && bun install --production --silent)
 BUN_BIN="$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$(command -v bun)")"
+# Homebrew installs bun read-only; remove the last copy so a rebuild can replace it.
+rm -f build/app-bun
 cp "$BUN_BIN" build/app-bun
 ok "$BUILD, with bun $(bun --version)"
 
@@ -117,6 +119,13 @@ if [ "$SIGN_ID" != - ] && ! security find-identity -p codesigning | grep -q "\"$
   bad "signing identity \"$SIGN_ID\" is not in the keychain"
   exit 1
 fi
+# A checkout under iCloud Drive (~/Documents, ~/Desktop) keeps re-adding file
+# metadata, and codesign refuses any of it ("resource fork, Finder information, or
+# similar detritus"). Sign a copy made outside the synced folder, without that metadata.
+STAGE="$(mktemp -d "${TMPDIR:-/tmp}/claude-dashboard-app.XXXXXX")"
+ditto --norsrc --noextattr --noacl "$APP" "$STAGE/$APP_NAME.app"
+APP="$STAGE/$APP_NAME.app"
+xattr -cr "$APP" 2>/dev/null || true
 sign() { codesign --force --sign "$SIGN_ID" --entitlements scripts/entitlements.plist --timestamp=none "$@" 2>/dev/null; }
 # Inside out, and never --deep: Claude Code and bun keep their makers' signatures,
 # which is what their Keychain access and their notarisation hang on.
@@ -138,7 +147,7 @@ if [ "$INSTALL" = 1 ]; then
     exit 1
   fi
   rm -rf "$DEST"
-  ditto "$APP" "$DEST"
+  ditto --norsrc --noextattr --noacl "$APP" "$DEST"
   ok "$DEST"
 fi
 

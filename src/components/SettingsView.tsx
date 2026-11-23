@@ -1,4 +1,5 @@
 import { createPortal } from "react-dom";
+import BaEditionSettings from "./BaEditionSettings.tsx";
 import { FoldersModal } from "./FoldersModal.tsx";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -45,10 +46,11 @@ function labelFromModelId(id: string): string {
  * scrolling: notifications alone is longer than a screen, and the three short
  * panels were disappearing under it.
  */
-type SectionKey = "appearance" | "pages" | "notifications" | "sessions" | "artifacts" | "services" | "code" | "mcp";
+type SectionKey = "appearance" | "ba" | "pages" | "notifications" | "sessions" | "artifacts" | "services" | "code" | "mcp";
 
 const SECTIONS: { key: SectionKey; label: string; help: string }[] = [
   { key: "appearance", label: "Appearance", help: "Theme, accent, tab icon" },
+  { key: "ba", label: "BA edition", help: "Solution architect / PS / IDM additions, and credits" },
   { key: "pages", label: "Pages", help: "Which pages the dock shows" },
   { key: "notifications", label: "Notifications", help: "What interrupts you" },
   { key: "sessions", label: "Sessions", help: "Where a card opens, model and permissions" },
@@ -134,6 +136,8 @@ export function SettingsView({
             <AppearancePanel appearance={appearance} onChange={onAppearance} />
           ) : section === "mcp" ? (
             <McpPanel />
+          ) : section === "ba" ? (
+            <BaEditionSettings />
           ) : (
             <div className="empty">Loading settings…</div>
           )}
@@ -558,6 +562,7 @@ export function SettingsView({
         )}
 
         {section === "mcp" && <McpPanel />}
+        {section === "ba" && <BaEditionSettings />}
       </div>
     </div>
   );

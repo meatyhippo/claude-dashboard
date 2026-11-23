@@ -1,4 +1,6 @@
 import { useMemo, useState } from "react";
+import { baFlags, T } from "../baFlags.ts";
+import MyDealsPanel from "./MyDealsPanel.tsx";
 import { workspaceApi, type Project, type Workspace } from "../api.ts";
 import type { Task } from "../../shared/tasks.ts";
 import { useDrawings } from "./DrawingsView.tsx";
@@ -98,7 +100,7 @@ export function ProjectsView({
           const repos = [...new Map(row.workspaces.map((w) => [w.repoKey, w])).values()];
           return (
             <article key={p.id} className={`project-card${row.away ? " archived" : ""}`}>
-              <a className="project-card-main" href={`#/project/${p.id}`} title="Open this project">
+              <a className="project-card-main" href={`#/project/${p.id}`} title={`Open this ${T.project}`}>
                 <span className="project-card-marks">
                   {hasOwnMark(p) ? (
                     <OwnProjectMark project={p} size={30} />
@@ -119,7 +121,7 @@ export function ProjectsView({
                   </small>
                 </span>
               </a>
-              <button className="icon-btn ghost square project-card-more" title="Project actions" aria-label={`Actions for ${p.name}`} onClick={(e) => setMenu({ row, anchor: e.currentTarget })}>
+              <button className="icon-btn ghost square project-card-more" title={`${T.Project} actions`} aria-label={`Actions for ${p.name}`} onClick={(e) => setMenu({ row, anchor: e.currentTarget })}>
                 <MoreVerticalIcon />
               </button>
               {row.workspaces.length > 0 && (
@@ -165,8 +167,9 @@ export function ProjectsView({
 
   return (
     <div className="projects">
+      {baFlags.customers && <MyDealsPanel onOpenCustomer={(id) => onOpen(id)} />}
       <div className="projects-head">
-        <input type="search" className="drawings-search" placeholder="Search projects, repositories and branches" value={query} onChange={(e) => setQuery(e.target.value)} />
+        <input type="search" className="drawings-search" placeholder={`Search ${T.projects}, repositories and branches`} value={query} onChange={(e) => setQuery(e.target.value)} />
         <div className="seg" role="tablist" aria-label="Which projects">
           <button role="tab" aria-selected={show === "current"} className={show === "current" ? "active" : ""} onClick={() => setShow("current")}>
             Current <em>{rows.filter((r) => !r.away && !r.project.generalKey).length}</em>
@@ -177,12 +180,12 @@ export function ProjectsView({
         </div>
         <span style={{ flex: 1 }} />
         <button className="icon-btn primary" onClick={create}>
-          <PlusIcon /> New project
+          <PlusIcon /> {T.newProject}
         </button>
       </div>
       {error && <div className="chat-error">{error}</div>}
       {shown.length === 0 && (
-        <div className="empty">{show === "archived" ? "Nothing is archived." : q ? "No project matches." : "No projects yet. Start one, or start a session in a repository."}</div>
+        <div className="empty">{show === "archived" ? "Nothing is archived." : q ? `No ${T.project} matches.` : baFlags.customers ? "No customers yet. Create them from your deals above, or add one." : "No projects yet. Start one, or start a session in a repository."}</div>
       )}
       <div className="projects-grid">{shown.filter((r) => !r.project.generalKey).map(cardOf)}</div>
       {general.length > 0 && (
@@ -204,7 +207,7 @@ export function ProjectsView({
             }}
           >
             <FolderIcon open />
-            <span className="ws-menu-label">Open project</span>
+            <span className="ws-menu-label">Open {T.project}</span>
           </button>
           <hr />
           {menu.row.away && !menu.row.project.archivedAt ? null : menu.row.project.archivedAt ? (

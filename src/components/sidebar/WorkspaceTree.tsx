@@ -1,4 +1,5 @@
 import { markColorValue, markKey } from "../../../shared/projectMarks.ts";
+import { T } from "../../baFlags.ts";
 import { parseProjectFileId } from "../../../shared/projectFiles.ts";
 import {
   Fragment,
@@ -1195,7 +1196,7 @@ export function WorkspaceTree({
   return (
     <div
       className="ws-tree"
-      aria-label="Projects"
+      aria-label={T.Projects}
       onDrop={(e) => {
         if (!e.dataTransfer.types.includes(SESSION_DRAG_MIME)) return;
         e.preventDefault();
@@ -1203,7 +1204,7 @@ export function WorkspaceTree({
       }}
     >
       <div className="ws-head">
-        <span className="ws-head-label">Projects</span>
+        <span className="ws-head-label">{T.Projects}</span>
         {needsTotal > 0 && (
           <button
             className={`ws-filter${only ? " on" : ""}`}

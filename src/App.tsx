@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { baFlags, baPageOn, T } from "./baFlags.ts";
 import { WeekStartContext } from "./components/DatePicker.tsx";
 import { setProjectMarks } from "./projectMarks.ts";
 import {
@@ -54,6 +55,8 @@ import {
   PanelLeftIcon,
   PullRequestIcon,
   HomeIcon,
+  CommentIcon,
+  InboxIcon,
   PulseIcon,
   SearchIcon,
   SunMoonIcon,
@@ -101,6 +104,10 @@ import { DrawingPage } from "./components/DrawingPane.tsx";
 import { ProjectPage } from "./components/ProjectPage.tsx";
 import { ProjectsView } from "./components/ProjectsView.tsx";
 import { DrawingsView } from "./components/DrawingsView.tsx";
+import InboxView from "./components/InboxView.tsx";
+import FeedbackMode from "./components/FeedbackMode.tsx";
+import DeliveryView from "./components/DeliveryView.tsx";
+import QaiView from "./components/QaiPanel.tsx";
 import { DRAWINGS_CHANGED } from "./components/drawingEvents.ts";
 import { isDrawingKey } from "../shared/drawings.ts";
 import { isNoteKey, noteKey, noteName, notePathOf } from "../shared/notes.ts";
@@ -150,6 +157,9 @@ const TAB_LABEL: Record<Tab, string> = Object.fromEntries(PAGES.map((p) => [p.ke
  * excluded — it stays icon-only via NineDotsIcon in the dock render. */
 const TAB_ICON: Record<Exclude<Tab, "desktop">, () => JSX.Element> = {
   live: HomeIcon,
+  inbox: InboxIcon,
+  delivery: PulseIcon,
+  qai: CommentIcon,
   tasks: TasksIcon,
   calendar: CalendarIcon,
   history: ClockIcon,
@@ -184,7 +194,12 @@ function routeWorkspaceId(): number | null {
 }
 
 const routePrNow = () => routePr(window.location.hash);
-const TAB_ROUTES: Record<string, Tab> = { "#/tasks": "tasks", "#/calendar": "calendar" };
+const TAB_ROUTES: Record<string, Tab> = {
+  "#/tasks": "tasks",
+  "#/calendar": "calendar",
+  // BA edition: its pages get a link of their own only while their switch is on.
+  ...(Object.fromEntries((["inbox", "delivery", "qai", "projects", "artifacts", "desktop"] as const).filter((k) => baFlags.enabled && baPageOn(k)).map((k) => [`#/${k}`, k])) as Record<string, Tab>),
+};
 /** #/calendar/<epoch ms>: the calendar, on the week that moment falls in. */
 const CALENDAR_AT = /^#\/calendar\/(\d+)$/;
 
@@ -1329,7 +1344,7 @@ export default function App() {
   upFromHere.current = workspacePage && pageProject && !pageProject.generalKey ? `#/project/${pageProject.id}` : "";
   /** What the page on screen sits inside, outermost first: the tab, then its project and workspace when it has them. */
   const parents: { label: string; go: () => void }[] = [
-    ...(projectPage || pageProject ? [{ label: TAB_LABEL.projects || "Projects", go: () => goTo("projects") }] : []),
+    ...(projectPage || pageProject ? [{ label: TAB_LABEL.projects || T.Projects, go: () => goTo("projects") }] : []),
     ...(pageProject ? [{ label: pageProject.name, go: () => openProject(pageProject.id) }] : []),
     ...(pageId && pageWorkspace ? [{ label: pageWorkspace.repoName, go: () => openWorkspace(pageWorkspace) }] : []),
   ];
@@ -1513,7 +1528,7 @@ export default function App() {
         />
       )}
 
-      {!onFullPage && usage && tab !== "live" && tab !== "worktrees" && tab !== "settings" && tab !== "desktop" && tab !== "reviews" && tab !== "artifacts" && tab !== "drawings" && tab !== "notes" && tab !== "projects" && tab !== "services" && tab !== "templates" && tab !== "tasks" && tab !== "calendar" && tab !== "history" && (
+      {!onFullPage && usage && tab !== "live" && tab !== "worktrees" && tab !== "settings" && tab !== "desktop" && tab !== "reviews" && tab !== "artifacts" && tab !== "drawings" && tab !== "notes" && tab !== "projects" && tab !== "services" && tab !== "templates" && tab !== "tasks" && tab !== "calendar" && tab !== "history" && tab !== "inbox" && tab !== "delivery" && tab !== "qai" && (
         <div className="kpis">
           {/* Tokens here are fresh tokens: cache reads are excluded and shown
               separately, since they are ~97% of raw volume at a tenth the rate. */}
@@ -1660,6 +1675,10 @@ export default function App() {
         />
       )}
       {!onFullPage && tab === "notes" && <NotesView onOpen={openSession} />}
+      {baFlags.feedback && <FeedbackMode />}
+      {!onFullPage && tab === "inbox" && baFlags.inbox && <InboxView onOpen={(key) => openSession(key, { drawer: true })} />}
+      {!onFullPage && tab === "delivery" && baFlags.delivery && <DeliveryView onOpen={(key) => openSession(key, { drawer: true })} />}
+      {!onFullPage && tab === "qai" && baFlags.qai && <QaiView />}
       {!onFullPage && tab === "drawings" && <DrawingsView projects={workspaces?.projects ?? NO_PROJECT_LIST} onOpen={openSession} />}
       {!onFullPage && tab === "worktrees" && (
         <WorktreesView

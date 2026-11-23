@@ -1,4 +1,5 @@
 import { parseProjectFileId } from "../../shared/projectFiles.ts";
+import { baFlags } from "../baFlags.ts";
 import { useEffect, useMemo, useState } from "react";
 import { drawingApi, type Drawing, type Project } from "../api.ts";
 import { drawingKey } from "../../shared/drawings.ts";
@@ -107,6 +108,22 @@ export function DrawingsView({
       .catch(fail);
 
   const movable = projects.filter((p) => !p.generalKey?.startsWith("review:"));
+  const customers = movable.filter((p) => !p.archivedAt && !p.generalKey);
+
+  /** A styleguide-ready scene named after the customer and filed under them. */
+  const createLandscape = async (projectId: number | null) => {
+    const customer = projectId !== null ? byId.get(projectId)?.name : window.prompt("Customer name for this integration landscape");
+    if (!customer?.trim()) return;
+    try {
+      const { drawing } = await drawingApi.create({ title: customer.trim(), projectId });
+      const { hash } = await drawingApi.read(drawing.slug);
+      const { landscapeSceneJson } = await import("./QargoDiagramTools.tsx");
+      await drawingApi.save(drawing.slug, { scene: landscapeSceneJson(customer), baseHash: hash });
+      onOpen(drawingKey(drawing.slug), { full: true });
+    } catch (e) {
+      fail(e);
+    }
+  };
 
   return (
     <div className="drawings">
@@ -115,6 +132,23 @@ export function DrawingsView({
         <span className="drawings-root" title="Drawings that belong to no project are kept here; a project's own are in its folder. Change both under Settings → Folders.">
           {root.replace(/^\/Users\/[^/]+/, "~")} and each project's folder
         </span>
+        {baFlags.diagrams && <select
+          className="icon-btn"
+          value=""
+          title="A new diagram following the Qargo Excalidraw styleguide, named after the customer"
+          onChange={(e) => {
+            const v = e.target.value;
+            if (v) void createLandscape(v === "other" ? null : Number(v));
+          }}
+        >
+          <option value="">New integration landscape…</option>
+          {customers.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+          <option value="other">Other customer…</option>
+        </select>}
         <button className="icon-btn primary" onClick={() => void create()}>
           <PlusIcon /> New drawing
         </button>

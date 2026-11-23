@@ -1,6 +1,11 @@
 import { ItemActions, taskActions } from "./ItemActions.tsx";
+import { baFlags, T } from "../baFlags.ts";
+import { CustomerSection } from "./CustomerPanels.tsx";
+import { QaiPanel } from "./QaiPanel.tsx";
+import CustomerOverview from "./CustomerOverview.tsx";
 import { TaskQuickAdd } from "./tasks/TaskQuickAdd.tsx";
-import { Workbench } from "./workbench/Workbench.tsx";
+import { fileTab, Workbench } from "./workbench/Workbench.tsx";
+import BaFilesBar from "./BaFilesBar.tsx";
 import { useRef, useState } from "react";
 import { artifactApi, drawingApi, noteApi, prParam, taskApi, workspaceApi, type Artifact, type Project, type Workspace } from "../api.ts";
 import { artifactKey } from "../../shared/artifacts.ts";
@@ -19,7 +24,7 @@ import { WorkspaceServices } from "./services/WorkspaceServices.tsx";
 import { STATUS_LABEL, type SidebarSession } from "./sidebar/sessions.ts";
 import { StackPanel, switchToLayer, useStack } from "./StackPanel.tsx";
 
-type Tab = "overview" | "files" | "services";
+type Tab = "overview" | "requirements" | "front" | "qai" | "files" | "services";
 const TAB_KEY = "project-tab";
 const NO_CHANGES = new Map<string, string>();
 
@@ -303,7 +308,7 @@ export function ProjectPage({
   const [tab, setTab] = useState<Tab>(() => {
     try {
       const saved = localStorage.getItem(TAB_KEY);
-      return saved === "services" || saved === "files" ? saved : "overview";
+      return saved === "services" || saved === "files" || (baFlags.customers && (saved === "requirements" || saved === "front")) || (baFlags.qai && saved === "qai") ? saved : "overview";
     } catch {
       return "overview";
     }
@@ -329,10 +334,27 @@ export function ProjectPage({
   const waiting = sessions.filter((s) => s.status === "needs").length;
   const tabs: { key: Tab; label: string; count: number }[] = [
     { key: "overview", label: "Overview", count: 0 },
+    ...(project.generalKey || !baFlags.customers ? [] : [{ key: "requirements" as const, label: "Integration tickets", count: 0 }, { key: "front" as const, label: "Front", count: 0 }]),
+    ...(project.generalKey || !baFlags.qai ? [] : [{ key: "qai" as const, label: "Qai", count: 0 }]),
     ...(project.folder ? [{ key: "files" as const, label: "Files", count: 0 }] : []),
     { key: "services", label: "Services", count: 0 },
   ];
   const [fileTabKey, setFileTabKey] = useState("folder");
+  const [wbKey, setWbKey] = useState(0);
+  /** A new file opens in the workbench at once: add it to its open files, remount, and focus its tab. */
+  const openCreated = (rel: string, kind: "file" | "folder") => {
+    if (kind === "file") {
+      try {
+        const key = `workbench:${-project.id}`;
+        const layout = JSON.parse(localStorage.getItem(key) ?? "{}") as { files?: string[] };
+        localStorage.setItem(key, JSON.stringify({ ...layout, files: [...new Set([...(layout.files ?? []), rel])] }));
+      } catch {
+        /* storage blocked: the file is still in the tree */
+      }
+      setFileTabKey(fileTab(rel));
+    }
+    setWbKey((n) => n + 1);
+  };
 
   return (
     <div className="page workspace-page project-page">
@@ -347,7 +369,7 @@ export function ProjectPage({
             <EditableTitle
               as="h1"
               value={project.name}
-              placeholder="Project"
+              placeholder={T.Project}
               onRename={async (name) => {
                 await workspaceApi.renameProject(project.id, name);
               }}
@@ -363,7 +385,7 @@ export function ProjectPage({
                 repos.map((w) => <ProjectMark key={w.repoKey} projectKey={w.repoKey} name={w.repoName} />)
               )}
             </button>
-            {project.generalKey ? "Work in this repository that is part of no project" : "Project"} · {workspaces.length} workspace
+            {project.generalKey ? "Work in this repository that is part of no project" : T.Project} · {workspaces.length} workspace
             {workspaces.length === 1 ? "" : "s"}
           </p>
           {picking && markRef.current && (
@@ -416,6 +438,10 @@ export function ProjectPage({
           </a>
         ))}
       </div>
+
+      {tab === "overview" && baFlags.customers && !project.generalKey && (
+        <CustomerOverview projectId={project.id} onOpen={(key) => onOpenSession(key, {})} onTab={(next) => pick(next)} />
+      )}
 
       {tab === "overview" && (
         <div className="prj-layout">
@@ -592,9 +618,18 @@ export function ProjectPage({
         </div>
       )}
 
+      {tab === "qai" && baFlags.qai && !project.generalKey && <QaiPanel projectId={project.id} />}
+
+      {(tab === "requirements" || tab === "front") && baFlags.customers && !project.generalKey && (
+        <CustomerSection projectId={project.id} projectName={project.name} view={tab} onOpen={(key) => onOpenSession(key, {})} />
+      )}
+
       {tab === "files" && project.folder && (
+        <>
+        {baFlags.customers && !project.generalKey && <BaFilesBar projectId={project.id} onCreated={openCreated} />}
         <div className="prj-files">
           <Workbench
+            key={wbKey}
             workspaceId={-project.id}
             cwd={project.folder}
             views={[
@@ -620,6 +655,7 @@ export function ProjectPage({
             onNewTerminal={() => onNewProjectTerminal(project.id)}
           />
         </div>
+        </>
       )}
 
       {tab === "services" && (

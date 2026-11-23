@@ -44,10 +44,10 @@ export function useDrawing(key: string): Drawing | null | false {
 type SaveState = "saved" | "saving" | "error";
 const SAVE_LABEL: Record<SaveState, string> = { saved: "Saved", saving: "Saving…", error: "Not saved" };
 
-function Canvas({ slug, onState }: { slug: string; onState: (s: SaveState) => void }) {
+function Canvas({ slug, title, onState }: { slug: string; title?: string; onState: (s: SaveState) => void }) {
   return (
     <Suspense fallback={<div className="empty">Loading the canvas…</div>}>
-      <DrawingCanvas slug={slug} onState={onState} />
+      <DrawingCanvas slug={slug} title={title} onState={onState} />
     </Suspense>
   );
 }
@@ -74,7 +74,7 @@ export function DrawingPanel({
         <div className="drawer-actions">{found && <span className={`drawing-state ${state}`}>{SAVE_LABEL[state]}</span>}</div>
       </div>
       {found === false && <div className="empty">This drawing is no longer on disk.</div>}
-      {found && <Canvas slug={found.slug} onState={setState} />}
+      {found && <Canvas slug={found.slug} title={found.title} onState={setState} />}
     </>
   );
 }
@@ -110,7 +110,7 @@ export function DrawingPage({ id, onBack }: { id: string; onBack: () => void }) 
       {found === false && <div className="empty">This drawing is no longer on disk.</div>}
       {found && (
         <div className="panel drawing-page-panel">
-          <Canvas slug={found.slug} onState={setState} />
+          <Canvas slug={found.slug} title={found.title} onState={setState} />
         </div>
       )}
     </div>

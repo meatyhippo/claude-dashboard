@@ -1,3 +1,4 @@
+import { baFlags } from "../baFlags.ts";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { dirApi, type DirListing } from "../api.ts";
@@ -144,6 +145,19 @@ export function FolderPicker({
         </div>
 
         <div className="modal-actions fp-foot">
+          {baFlags.enabled && <button
+            className="icon-btn ghost fp-native"
+            title="Pick the folder in the macOS dialog"
+            onClick={() =>
+              void fetch("/api/ba/choose-folder", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ from: listing?.path }) })
+                .then((r) => r.json() as Promise<{ path?: string | null; error?: string }>)
+                .then((r) => r.path && onPick(r.path))
+                .catch(() => {})
+            }
+          >
+            Choose in Finder…
+          </button>}
+          {baFlags.enabled && <span style={{ flex: 1 }} />}
           <button className="icon-btn ghost" onClick={onClose}>
             Cancel
           </button>

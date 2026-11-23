@@ -1,3 +1,4 @@
+import type { BaAction, BaAgendaEvent, BaSlackPost, BaDealSuggestions, BaCustomer, BaDeal, BaFrontThread, BaIrSession, BaMailThread, BaMailView, BaPublished, BaReply, BaQaiQuestion, BaRequirement, BaTicket, BaTriageThread, Cached } from "../shared/baCustomers.ts";
 import type { WorkspaceTerminal } from "../shared/terminals.ts";
 export type { WorkspaceTerminal };
 import type {
@@ -1645,4 +1646,58 @@ export type { Template, TemplateRun, Schedule } from "../shared/templates.ts";
 export const templateApi = {
   runs: () => get<{ runs: TemplateRun[]; next: Record<string, number | null> }>("/api/templates/runs"),
   run: (id: string, cwd?: string) => post<{ key: string }>(`/api/templates/${encodeURIComponent(id)}/run`, cwd ? { cwd } : {}),
+};
+
+// ── BA edition: customers, Notion requirements, Front ─────────────────────────
+
+const baDel = async <T,>(path: string): Promise<T> => {
+  const res = await fetch(path, { method: "DELETE" });
+  if (!res.ok) throw new Error(await errorText(res, path));
+  return res.json() as Promise<T>;
+};
+const put = async <T,>(path: string, body: unknown): Promise<T> => {
+  const res = await fetch(path, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  if (!res.ok) throw new Error(await errorText(res, path));
+  return res.json() as Promise<T>;
+};
+const qs = (refresh?: boolean) => (refresh ? "?refresh=1" : "");
+
+export const baApi = {
+  myDeals: (refresh?: boolean) => get<Cached<BaDeal[]>>(`/api/ba/deals/mine${qs(refresh)}`),
+  suggestDeals: () => get<BaDealSuggestions>("/api/ba/deals/suggest"),
+  allDeals: (refresh?: boolean) => get<Cached<BaDeal[]>>(`/api/ba/deals/all${qs(refresh)}`),
+  searchDeals: (q: string) => get<{ deals: BaDeal[] }>(`/api/ba/deals/search?q=${encodeURIComponent(q)}`),
+  assignDeals: (urls: string[], projectId: number | null) => post<{ deals: BaDeal[] }>("/api/ba/deals/assign", { urls, projectId }),
+  customers: () => get<{ customers: BaCustomer[] }>("/api/ba/customers"),
+  createCustomer: (urls: string[], name?: string) => post<{ customer: BaCustomer }>("/api/ba/customers", { urls, name }),
+  customer: (projectId: number) => get<{ customer: BaCustomer | null }>(`/api/ba/customers/${projectId}`),
+  setCustomer: (projectId: number, s: { frontQuery?: string; extraDomains?: string }) => put<{ customer: BaCustomer | null }>(`/api/ba/customers/${projectId}`, s),
+  requirements: (projectId: number, refresh?: boolean) => get<Cached<BaRequirement[]>>(`/api/ba/customers/${projectId}/requirements${qs(refresh)}`),
+  slack: (projectId: number, refresh?: boolean) => get<Cached<BaSlackPost[]>>(`/api/ba/customers/${projectId}/slack${qs(refresh)}`),
+  front: (projectId: number, refresh?: boolean) => get<Cached<(BaFrontThread & { irUrl: string | null; linked: boolean })[]>>(`/api/ba/customers/${projectId}/front${qs(refresh)}`),
+  ticket: (url: string, refresh?: boolean) => get<Cached<BaTicket>>(`/api/ba/ticket?url=${encodeURIComponent(url)}${refresh ? "&refresh=1" : ""}`),
+  irSessions: (url: string) => get<{ sessions: (BaIrSession & { status: string | null })[] }>(`/api/ba/ir-sessions?url=${encodeURIComponent(url)}`),
+  inbox: (refresh?: boolean) => get<Cached<BaTriageThread[]> & { seenIds: string[] }>(`/api/ba/inbox${qs(refresh)}`),
+  triage: (thread: BaFrontThread, projectId: number, irUrl: string | null, source: "manual" | "accepted") =>
+    post<{ ok: true; offerFrontLink?: boolean; currentFrontLink?: string | null }>("/api/ba/triage", { thread, projectId, irUrl, source }),
+  setFrontLink: (irUrl: string, link: string, projectId?: number) => post<{ ok: true }>("/api/ba/ir/front-link", { irUrl, link, projectId }),
+  untriage: (threadId: string) => baDel<{ ok: true }>(`/api/ba/triage?thread=${encodeURIComponent(threadId)}`),
+  published: () => get<{ published: BaPublished[]; snapshot: string }>("/api/ba/published"),
+  action: (a: BaAction) => post<{ ok: true; key: string; cloud?: boolean; url?: string }>("/api/ba/action", a),
+  threadFiles: (threadId: string, save?: boolean) => (save ? post<{ dir: string | null; rel: string | null; files: string[]; error?: string | null }>(`/api/ba/mail/thread/${threadId}/files`) : get<{ dir: string | null; rel: string | null; files: string[]; error?: string | null }>(`/api/ba/mail/thread/${threadId}/files`)),
+  keyPoints: (threadId: string) => get<{ ask: string; details: string[]; needed: string; language: string }>(`/api/ba/mail/thread/${threadId}/key`),
+  teleport: (url: string, projectId?: number | null) => post<{ ok: true; key: string }>("/api/ba/teleport", { url, projectId }),
+  suggestReply: (threadId: string, projectId: number | null, instructions: string) => post<{ text: string }>(`/api/ba/mail/thread/${threadId}/suggest`, { projectId, instructions }),
+  newEntry: (projectId: number, path: string, kind: "file" | "folder") => post<{ rel: string }>("/api/ba/files/new", { projectId, path, kind }),
+  openFolder: (projectId: number, app: "vscode" | "finder", path?: string) => post<{ ok: true }>("/api/ba/files/open", { projectId, app, path }),
+  agenda: (days: number, refresh?: boolean) => get<Cached<BaAgendaEvent[]>>(`/api/ba/agenda?days=${days}${refresh ? "&refresh=1" : ""}`),
+  mail: (view: BaMailView, refresh?: boolean) => get<Cached<BaTriageThread[]> & { seenIds: string[]; pending?: number }>(`/api/ba/mail?view=${view}${refresh ? "&refresh=1" : ""}`),
+  thread: (id: string, refresh?: boolean) => get<Cached<BaMailThread>>(`/api/ba/mail/thread/${id}${qs(refresh)}`),
+  reply: (id: string, r: BaReply) => post<{ ok: true; draftId?: string; to?: string[]; sent?: boolean; commented?: boolean }>(`/api/ba/mail/thread/${id}/reply`, r),
+  delivery: (refresh?: boolean) => get<Cached<(BaRequirement & { projectId: number | null })[]> & { customers: BaCustomer[] }>(`/api/ba/delivery${qs(refresh)}`),
+  qai: (projectId?: number | null) => get<{ questions: BaQaiQuestion[] }>(`/api/ba/qai${projectId ? `?project=${projectId}` : ""}`),
+  composeQai: (question: string, projectId?: number | null, irUrl?: string | null) => post<{ message: string }>("/api/ba/qai/compose", { question, projectId, irUrl }),
+  askQai: (q: { question: string; message: string; projectId?: number | null; irUrl?: string | null }) => post<{ question: BaQaiQuestion }>("/api/ba/qai", q),
+  qaiToday: (refresh?: boolean) => get<{ data: { author: string; text: string; at: string | null; fromQai: boolean }[]; error: string | null }>(`/api/ba/qai/today${qs(refresh)}`),
+  qaiReplies: (id: number) => get<{ question: BaQaiQuestion }>(`/api/ba/qai/${id}/replies`),
 };

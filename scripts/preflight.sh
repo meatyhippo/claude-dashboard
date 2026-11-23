@@ -37,6 +37,8 @@ ensure_bun_on_path() {
     *":$BUN_BIN_DIR:"*) ;;
     *) [ -d "$BUN_BIN_DIR" ] && export PATH="$BUN_BIN_DIR:$PATH" ;;
   esac
+  # A bun from Homebrew has no ~/.bun/bin; that is fine, and must not fail `set -e` callers.
+  return 0
 }
 
 # ── required / optional dependency probes ─────────────────────────────────────

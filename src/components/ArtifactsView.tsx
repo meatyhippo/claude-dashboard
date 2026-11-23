@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { baFlags } from "../baFlags.ts";
+import PublishedArtifacts from "./PublishedArtifacts.tsx";
 import { createPortal } from "react-dom";
 import { artifactApi, fmtAgo, shortPath, type Artifact, type ArtifactTag, type Project } from "../api.ts";
 import { artifactKey } from "../../shared/artifacts.ts";
@@ -150,6 +152,7 @@ export function ArtifactsView({
 
   return (
     <div className="artifacts">
+      {baFlags.published && <PublishedArtifacts onOpen={(key) => onOpenSession(key)} />}
       <div className="artifacts-head">
         <div>
           <p className="hint">

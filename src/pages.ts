@@ -1,3 +1,4 @@
+import { baFlags, baPageOn, T } from "./baFlags.ts";
 /**
  * The dock's pages, in the order they appear.
  *
@@ -5,7 +6,7 @@
  * turns them off — a page hidden in settings has to disappear from all three, and
  * three separate lists drifted apart the moment one gained a page.
  */
-export type Tab = "desktop" | "live" | "projects" | "tasks" | "calendar" | "history" | "artifacts" | "drawings" | "notes" | "worktrees" | "services" | "templates" | "reviews" | "usage" | "settings";
+export type Tab = "desktop" | "live" | "inbox" | "delivery" | "projects" | "tasks" | "calendar" | "history" | "artifacts" | "drawings" | "notes" | "worktrees" | "services" | "qai" | "templates" | "reviews" | "usage" | "settings";
 
 export type PageDef = {
   key: Tab;
@@ -23,7 +24,9 @@ export type PageDef = {
 export const PAGES: PageDef[] = [
   { key: "desktop", label: "", hint: "a blank canvas for arranging tiles" },
   { key: "live", label: "Home", hint: "what needs you, what is running, and your day", fixed: true },
-  { key: "projects", label: "Projects", hint: "every piece of work, current and archived" },
+  { key: "inbox", label: "Inbox", hint: "your open Front conversations, placed at customers and IRs" },
+  { key: "delivery", label: "Delivery", hint: "IDM view: meetings, scoping window, billable pipeline, go-live" },
+  { key: "projects", label: T.Projects, hint: baFlags.customers ? "every customer, current and archived" : "every piece of work, current and archived" },
   { key: "tasks", label: "Tasks", hint: "your to-dos, with dates and projects" },
   { key: "calendar", label: "Calendar", hint: "your calendar events beside your tasks" },
   { key: "history", label: "History", hint: "past sessions" },
@@ -32,6 +35,7 @@ export const PAGES: PageDef[] = [
   { key: "drawings", label: "Drawings", hint: "whiteboards, kept per project" },
   { key: "worktrees", label: "Workspaces", hint: "every checkout, by repository" },
   { key: "services", label: "Services", hint: "local dev stack" },
+  { key: "qai", label: "Qai", hint: "ask Qai in #ps_troubleshooting (codebase access)" },
   { key: "templates", label: "Templates", hint: "session recipes and schedules" },
   { key: "reviews", label: "Reviews", hint: "GitHub pull requests" },
   { key: "usage", label: "Usage", hint: "tokens and cost" },
@@ -42,7 +46,7 @@ export const HIDEABLE_PAGES = PAGES.filter((p) => !p.fixed);
 
 /** A page is on unless it was deliberately turned off, so a new one arrives visible. */
 export const isPageVisible = (key: Tab, hidden: string[] | undefined): boolean =>
-  PAGES.find((p) => p.key === key)?.fixed === true || !(hidden ?? []).includes(key);
+  baPageOn(key) && (PAGES.find((p) => p.key === key)?.fixed === true || !(hidden ?? []).includes(key));
 
 /** The pages in the user's order; keys not in the order keep their registry position at the end. */
 export const orderedPages = (order: string[] | undefined): PageDef[] => {
