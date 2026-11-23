@@ -28,7 +28,7 @@ import { baseFields, sessionDataShaper } from "./baDataShaper.ts";
 import { initSessionContext, recordSessionLink, sessionContext, threadIdIn } from "./baSessionContext.ts";
 import { lastQargoMcpStatus, mcpHowTo, qargoMcpStatus } from "./baQargoMcp.ts";
 import { cached, connectorCall, dropCache, FRONT_SEARCH, initConnector, markStale, NOTION_FETCH, NOTION_SELF, notionSql, parseJson, peekCache } from "./baConnector.ts";
-import { getBaFlags, setBaFlags } from "./baEdition.ts";
+import { getBaFlags, getMailStyle, mailStyleBlock, setBaFlags, setMailStyle } from "./baEdition.ts";
 import { agenda } from "./baCalendar.ts";
 import { attachmentError, initAttachments, saveAttachments, savedFor } from "./baAttachments.ts";
 import { chooseFolderNative, createEntry, openFolder } from "./baFiles.ts";
@@ -1144,6 +1144,10 @@ export async function handleBaRoute(req: Request, url: URL): Promise<Response | 
       return json({ text: await suggestReply(suggestMatch[1]!, context, b?.instructions ?? "") });
     }
     if (p === "/api/ba/qargo-mcp") return json(await qargoMcpStatus(refresh));
+    if (p === "/api/ba/mail-style") {
+      if (req.method === "PUT") return json({ text: setMailStyle((await body<{ text?: string }>())?.text ?? "") });
+      return json({ text: getMailStyle(), block: mailStyleBlock() });
+    }
     if (p === "/api/ba/session-context") {
       return json(
         sessionContext(

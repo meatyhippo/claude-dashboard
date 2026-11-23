@@ -10290,3 +10290,5 @@ body.fb-on .fb-ui, body.fb-on .fb-ui * { cursor: auto !important; }
 .scx-edit span { display: block; padding: 0 8px; }
 .scx-edit .del { background: rgba(224, 49, 49, 0.12); text-decoration: line-through; text-decoration-color: rgba(224, 49, 49, 0.4); }
 .scx-edit .add { background: rgba(0, 232, 91, 0.16); }
+.ba-mailstyle { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border, #E1E1E1); display: flex; flex-direction: column; gap: 8px; }
+.ba-mailstyle h3 { margin: 0; font-size: 15px; }

@@ -131,15 +131,18 @@ export default function SessionContextPane({ agentKey, sessionId, cwd, wide }: {
     ...(ctx.folder ? [{ key: "files" as const, label: "Files", count: touched.size ? `${touched.size} touched` : undefined }] : []),
   ];
 
-  const ask = (instructions: string) => {
+  const ask = async (instructions: string) => {
     if (!agentKey || !ctx.thread) return;
     setAsking(Date.now());
+    // Your own instructions for how mails read go with the request, as they do for Claude's quick drafts.
+    const style = await baApi.mailStyle().then((r) => r.block).catch(() => "");
     void agentApi
       .message(
         agentKey,
         `Write the reply to the Front conversation "${ctx.thread.subject}" (${ctx.thread.link}), based on what you found in this session. ` +
           `Write it in the language of the conversation, as me, ready to send. ${instructions.trim() ? `Also: ${instructions.trim()}. ` : ""}` +
-          `Put only the email text between <draft> and </draft>. Don't save or send it: it goes into the reply box beside this chat, where I'll edit and send it.`,
+          `Put only the email text between <draft> and </draft>. Don't save or send it: it goes into the reply box beside this chat, where I'll edit and send it.` +
+          style,
       )
       .catch(() => setAsking(null));
   };
@@ -177,7 +180,7 @@ export default function SessionContextPane({ agentKey, sessionId, cwd, wide }: {
             customers={customers}
             onPlaced={(th, pid, ir) => (pid === null ? baApi.untriage(th.id).then(() => ({})) : baApi.triage(th, pid, ir, "manual"))}
             onOpen={(key) => void (window.location.hash = `#/session/${encodeURIComponent(key)}`)}
-            session={agentKey ? { ask, asking: asking !== null, draft } : undefined}
+            session={agentKey ? { ask: (i) => void ask(i), asking: asking !== null, draft } : undefined}
           />
         </div>
       )}

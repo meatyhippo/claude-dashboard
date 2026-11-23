@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { baApi } from "../api.ts";
 import { BA_FLAG_INFO, type BaFlags } from "../../shared/baCustomers.ts";
 import { baRawFlags, saveBaFlags } from "../baFlags.ts";
 
@@ -48,6 +49,64 @@ export default function BaEditionSettings() {
         >
           {saving ? "Saving…" : "Save and reload"}
         </button>
+      </div>
+      {baRawFlags.enabled && <MailStyle />}
+    </div>
+  );
+}
+
+/** Your own instructions for how mails read: every reply draft follows them. */
+function MailStyle() {
+  const [text, setText] = useState<string | null>(null);
+  const [saved, setSaved] = useState("");
+  const [state, setState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  useEffect(() => {
+    void baApi
+      .mailStyle()
+      .then((r) => {
+        setText(r.text);
+        setSaved(r.text);
+      })
+      .catch(() => setText(""));
+  }, []);
+  if (text === null) return null;
+  return (
+    <div className="ba-mailstyle">
+      <h3>How your mails read</h3>
+      <p className="hint">
+        Every reply draft follows these: <strong>Draft with Claude</strong> in the Inbox and <strong>Draft from this session</strong> beside a chat. Paste the instructions you set for Claude elsewhere (tone, greeting, sign-off, language, length). A personal
+        <code> ~/.claude/CLAUDE.md</code> is added too when you have one.
+      </p>
+      <textarea
+        id="ba-mail-style"
+        className="ba-prompt"
+        rows={8}
+        value={text}
+        placeholder={"For example:\n- Short and friendly, no corporate phrases\n- Dutch-speaking customers: informal 'je', in Dutch\n- Start with 'Hi <first name>,' and end with 'Groeten,' / 'Kind regards,' and Mathijs"}
+        onChange={(e) => {
+          setText(e.target.value);
+          setState("idle");
+        }}
+      />
+      <div className="ba-row">
+        <button
+          className="icon-btn primary"
+          disabled={text === saved || state === "saving"}
+          onClick={() => {
+            setState("saving");
+            baApi
+              .saveMailStyle(text)
+              .then((r) => {
+                setSaved(r.text);
+                setState("saved");
+              })
+              .catch(() => setState("error"));
+          }}
+        >
+          {state === "saving" ? "Saving…" : "Save"}
+        </button>
+        {state === "saved" && <span className="hint">Saved. The next draft follows it.</span>}
+        {state === "error" && <span className="chat-error">Could not save. Is the dashboard's service running?</span>}
       </div>
     </div>
   );

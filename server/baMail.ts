@@ -1,3 +1,4 @@
+import { mailStyleBlock } from "./baEdition.ts";
 import type { BaFrontThread, BaMailEntry, BaMailThread, BaMailView, BaReply, BaTriageThread, Cached } from "../shared/baCustomers.ts";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { cached, connectorBatch, connectorCall, FRONT_SEARCH, parseJson, peekCache, recordShape } from "./baConnector.ts";
@@ -388,7 +389,7 @@ export async function suggestReply(id: string, context: string[], instructions: 
   setTimeout(() => stop.abort(), 120_000);
   const q = query({
     prompt: `<conversation>\n${threadAsText(th)}\n</conversation>\n\n<context>\n${context.join("\n")}\n</context>\n\n${instructions.trim() ? `What the reply should say: ${instructions.trim()}` : "Draft the reply."}`,
-    options: { env: claudeEnv(), cwd: SCRATCH_DIR, model: "sonnet", systemPrompt: REPLY_SYSTEM, maxTurns: 1, tools: [], mcpServers: {}, settingSources: [], persistSession: false, abortController: stop },
+    options: { env: claudeEnv(), cwd: SCRATCH_DIR, model: "sonnet", systemPrompt: REPLY_SYSTEM + mailStyleBlock(), maxTurns: 1, tools: [], mcpServers: {}, settingSources: [], persistSession: false, abortController: stop },
   });
   try {
     for await (const msg of q as AsyncIterable<any>) {

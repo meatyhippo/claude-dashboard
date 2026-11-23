@@ -82,7 +82,7 @@ export const BA_TEMPLATES: Template[] = [
   }),
 ];
 
-type Marker = { steps: Record<string, string>; flags?: Partial<BaFlags> };
+type Marker = { steps: Record<string, string>; flags?: Partial<BaFlags>; mailStyle?: string };
 
 function readMarker(): Marker {
   try {
@@ -114,6 +114,39 @@ export function applyBaEditionOnce(): void {
   for (const t of BA_TEMPLATES) if (!done(`template:${t.id}`)) mark(`template:${t.id}`);
 
   writeFileSync(MARKER_PATH, JSON.stringify(marker, null, 2));
+}
+
+/**
+ * How the user's mails read: their own instructions, which every reply draft
+ * follows (Claude's quick drafts and drafts written by a session). Kept beside
+ * the switches; a personal ~/.claude/CLAUDE.md is added when there is one.
+ */
+export function getMailStyle(): string {
+  return readMarker().mailStyle ?? "";
+}
+
+export function setMailStyle(text: string): string {
+  const marker = readMarker();
+  marker.mailStyle = text.slice(0, 8000);
+  writeFileSync(MARKER_PATH, JSON.stringify(marker, null, 2));
+  return marker.mailStyle;
+}
+
+/** The instructions as a block for a prompt, or "" when there are none. */
+export function mailStyleBlock(): string {
+  const own = getMailStyle().trim();
+  let global = "";
+  try {
+    const p = join(process.env.HOME ?? "", ".claude", "CLAUDE.md");
+    if (existsSync(p)) global = readFileSync(p, "utf8").trim().slice(0, 6000);
+  } catch {
+    /* unreadable: the dashboard's own copy still applies */
+  }
+  const parts = [
+    own && `How I want my emails written (these win over any default):\n${own}`,
+    global && `My general instructions for Claude (follow the parts about writing):\n${global}`,
+  ].filter(Boolean);
+  return parts.length ? `\n\n<my_instructions>\n${parts.join("\n\n")}\n</my_instructions>` : "";
 }
 
 /** The BA-edition switches, kept beside the one-time steps. */
