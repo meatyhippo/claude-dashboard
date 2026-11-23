@@ -68,11 +68,14 @@ export function Reader({
   customers,
   onPlaced,
   onOpen,
+  session,
 }: {
   t: BaTriageThread;
   customers: BaCustomer[];
   onPlaced: (t: BaTriageThread, projectId: number | null, irUrl: string | null) => Promise<{ offerFrontLink?: boolean } | void> | void;
   onOpen: (key: string) => void;
+  /** In a session's context pane: the session writes the reply from its own investigation. */
+  session?: { ask: (instructions: string) => void; asking: boolean; draft: { text: string; at: number } | null };
 }) {
   const [thread, setThread] = useState<Cached<BaMailThread> | null>(null);
   const [busy, setBusy] = useState(false);
@@ -104,6 +107,13 @@ export function Reader({
       setDrafting(false);
     }
   };
+  // A draft the session wrote lands in the composer, as Claude's own drafts do.
+  useEffect(() => {
+    if (!session?.draft) return;
+    setMode("reply");
+    setTimeout(() => composer.current?.setText(session.draft!.text), 0);
+    setNote("Draft from this session: edit it, then Review & send.");
+  }, [session?.draft?.at]); // eslint-disable-line react-hooks/exhaustive-deps
   const { run, error: actionError } = useAction(onOpen);
   /** Place, and when the IR has no Front Link yet, offer to write this thread to it. */
   const placeAt = async (projectId: number | null, irUrl: string | null) => {
@@ -416,9 +426,15 @@ export function Reader({
         {mode === "reply" && (
           <div className="mc-claude">
             <input className="drawings-search" placeholder="Optional: what should the reply say? (e.g. confirm Thursday, ask for a sample file)" value={ask} onChange={(e) => setAsk(e.target.value)} onKeyDown={(e) => e.key === "Enter" && !drafting && void draftWithClaude()} />
-            <button className="icon-btn" disabled={drafting || !!draft} onClick={() => void draftWithClaude()} title="Claude reads the conversation and what Notion knows about the customer, and writes the reply here">
-              {drafting ? "Drafting…" : <><SparkIcon /> Draft with Claude</>}
-            </button>
+            {session ? (
+              <button className="icon-btn primary" disabled={session.asking || !!draft} onClick={() => session.ask(ask)} title="The session writes the reply from what it found, and it lands here to edit">
+                {session.asking ? "The session is writing…" : <><SparkIcon /> Draft from this session</>}
+              </button>
+            ) : (
+              <button className="icon-btn" disabled={drafting || !!draft} onClick={() => void draftWithClaude()} title="Claude reads the conversation and what Notion knows about the customer, and writes the reply here">
+                {drafting ? "Drafting…" : <><SparkIcon /> Draft with Claude</>}
+              </button>
+            )}
           </div>
         )}
         {mode === "reply" && replyTo.length > 0 && <div className="mc-to ba-muted">Reply-all to {replyTo.join(", ")}</div>}

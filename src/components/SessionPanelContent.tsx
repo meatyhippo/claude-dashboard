@@ -1,3 +1,4 @@
+import SessionContextPane from "./SessionContextPane.tsx";
 import { baFlags } from "../baFlags.ts";
 import DataShaperPanel from "./DataShaperPanel.tsx";
 import { isArtifactKey } from "../../shared/artifacts.ts";
@@ -214,6 +215,7 @@ function SessionPanelBody({
           {agent.turns === 0 && data && turnsOf(data).length > 0 && (
             <p className="takeover-note">Earlier turns from before the dashboard took over are on the full page.</p>
           )}
+          {baFlags.customers && <SessionContextPane sessionId={id} agentKey={agent.key} cwd={cwd} />}
           {baFlags.qargoMcp && <DataShaperPanel sessionId={id} agentKey={agent.key} live compact />}
           <LiveConversation
             agentKey={agent.key}

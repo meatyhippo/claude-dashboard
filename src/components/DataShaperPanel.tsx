@@ -26,10 +26,8 @@ const OUTCOME: Record<DsOutcome, { label: string; tone: string }> = {
 const leafText = (l: DsLeaf | null | undefined): string =>
   !l ? "" : l.raw ?? [l.value ?? "", l.variables ? `\n// variables\n${l.variables}` : ""].join("").trim();
 
-/** A line diff (LCS): small expressions, so the simple table is plenty. */
-function lineDiff(a: string, b: string): { kind: "ctx" | "add" | "del"; text: string }[] {
-  const x = a ? a.split("\n") : [];
-  const y = b ? b.split("\n") : [];
+/** LCS over two token lists: small expressions, so the simple table is plenty. */
+function seqDiff(x: string[], y: string[]): { kind: "ctx" | "add" | "del"; text: string }[] {
   if (x.length * y.length > 250_000) return [...x.map((t) => ({ kind: "del" as const, text: t })), ...y.map((t) => ({ kind: "add" as const, text: t }))];
   const m = x.length, n = y.length;
   const L = Array.from({ length: m + 1 }, () => new Array<number>(n + 1).fill(0));
@@ -45,6 +43,7 @@ function lineDiff(a: string, b: string): { kind: "ctx" | "add" | "del"; text: st
   while (j < n) out.push({ kind: "add", text: y[j++]! });
   return out;
 }
+const lineDiff = (a: string, b: string) => seqDiff(a ? a.split("\n") : [], b ? b.split("\n") : []);
 
 const pretty = (s: string | null) => {
   if (!s) return "";
@@ -87,10 +86,10 @@ export function reportMarkdown(r: Report, before: Record<string, Record<string, 
   return out.join("\n");
 }
 
-/** Word-level diff for expressions that live on one long line: which part changed, not just that it did. */
+/** Word-level diff for expressions on a few long lines: which part changed, not just that it did. Whitespace and line breaks are tokens too, so they survive. */
 function tokenDiff(a: string, b: string): { kind: "ctx" | "add" | "del"; text: string }[] {
   const split = (t: string) => t.split(/(\s+|[(){}\[\],;:&|?=<>!+*/-])/).filter((x) => x !== "");
-  return lineDiff(split(a).join("\n"), split(b).join("\n"));
+  return seqDiff(split(a), split(b));
 }
 
 function Diff({ before, after, loading }: { before: DsLeaf | null | undefined; after: DsLeaf; loading: boolean }) {

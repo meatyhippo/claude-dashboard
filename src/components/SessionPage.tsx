@@ -1,3 +1,4 @@
+import SessionContextPane from "./SessionContextPane.tsx";
 import { baFlags } from "../baFlags.ts";
 import DataShaperPanel from "./DataShaperPanel.tsx";
 import { useEffect, useRef, useState } from "react";
@@ -179,7 +180,7 @@ export function SessionPage({
       {error && <div className="empty">{error}</div>}
       {!agent && live && <ExternalNotice />}
 
-      <div className={`session-cols${details ? " with-details" : ""}`}>
+      <div className={`session-cols${details ? " with-details" : ""}${baFlags.customers ? " with-context" : ""}`}>
         <div className="session-main">
           {/* BA edition: DataShaper changes on top of the conversation, folded while it runs */}
           {baFlags.qargoMcp && <DataShaperPanel sessionId={id} agentKey={agent?.key ?? null} live={!!agent} compact={!!agent} />}
@@ -218,6 +219,9 @@ export function SessionPage({
             </div>
           )}
         </div>
+
+        {/* BA edition: the mail, ticket and files this session works on, beside the chat */}
+        {baFlags.customers && <SessionContextPane sessionId={id} agentKey={agent?.key ?? null} cwd={cwd} wide />}
 
         {details && (
         <div className="page-side session-details">

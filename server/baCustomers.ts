@@ -25,6 +25,7 @@ import {
 } from "../shared/baCustomers.ts";
 import { getAgent, startAgent } from "./agents.ts";
 import { baseFields, sessionDataShaper } from "./baDataShaper.ts";
+import { initSessionContext, recordSessionLink, sessionContext, threadIdIn } from "./baSessionContext.ts";
 import { lastQargoMcpStatus, mcpHowTo, qargoMcpStatus } from "./baQargoMcp.ts";
 import { cached, connectorCall, dropCache, FRONT_SEARCH, initConnector, markStale, NOTION_FETCH, NOTION_SELF, notionSql, parseJson, peekCache } from "./baConnector.ts";
 import { getBaFlags, setBaFlags } from "./baEdition.ts";
@@ -73,6 +74,7 @@ export function initBaCustomers(database: Database) {
   initConnector(database);
   initQai(database);
   initAttachments(database);
+  initSessionContext(database);
   // Keep the mailbox warm: first round shortly after boot, then every 10 minutes.
   let round = 0;
   const warm = () => {
@@ -928,6 +930,10 @@ export function runAction(a: BaAction): { ok: true; key: string } | { ok: false;
   if (!built.ok) return built;
   // Production writes on the Qargo MCP are refused by auto mode's safety check, so a prod session asks you instead.
   const key = startAgent({ cwd: built.cwd, permissionMode: a.tenant === "prod" ? "default" : "auto", prompt: built.prompt, title: built.title });
+  // What the session works on, for the pane beside its chat.
+  const threadId = threadIdIn(a.url);
+  const isIr = !!a.url && /notion\.(so|com)/.test(a.url);
+  recordSessionLink(key, { projectId: a.projectId ?? (threadId ? placementOf(threadId)?.projectId : null) ?? null, threadId, irUrl: isIr ? a.url! : threadId ? (placementOf(threadId)?.irUrl ?? null) : null });
   if (a.url && /notion\.(so|com)/.test(a.url)) {
     db.query("INSERT INTO ba_ir_sessions (ir_url, project_id, agent_key, kind, title, started_at) VALUES (?, ?, ?, ?, ?, ?)").run(a.url, a.projectId ?? null, key, a.kind, built.title, Date.now());
   }
@@ -1138,6 +1144,22 @@ export async function handleBaRoute(req: Request, url: URL): Promise<Response | 
       return json({ text: await suggestReply(suggestMatch[1]!, context, b?.instructions ?? "") });
     }
     if (p === "/api/ba/qargo-mcp") return json(await qargoMcpStatus(refresh));
+    if (p === "/api/ba/session-context") {
+      return json(
+        sessionContext(
+          { agentKey: url.searchParams.get("agent"), sessionId: url.searchParams.get("session"), cwd: url.searchParams.get("cwd") },
+          {
+            customers: listCustomers,
+            placement: placementOf,
+            threadJson: (id) => {
+              const row = db.query<{ thread_json: string | null }, [string]>("SELECT thread_json FROM ba_thread_links WHERE thread_id = ?").get(id);
+              return row?.thread_json ? (JSON.parse(row.thread_json) as BaFrontThread) : null;
+            },
+            irTitle: (pid, u) => (peekCache<BaRequirement[]>(`p${pid}:requirements`) ?? []).find((q) => q.url === u)?.title ?? null,
+          },
+        ),
+      );
+    }
     if (p === "/api/ba/datashaper") {
       const r = sessionDataShaper(url.searchParams.get("session") ?? "");
       if (!r) return json({ error: "no transcript for this session yet" }, 404);
