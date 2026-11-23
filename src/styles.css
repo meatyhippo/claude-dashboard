@@ -10192,3 +10192,7 @@ body.fb-on .fb-ui, body.fb-on .fb-ui * { cursor: auto !important; }
 .mcp-dot.needs-auth { background: #f59f00; }
 .mcp-dot.failed, .mcp-dot.missing { background: #e03131; }
 .mcp-warn { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 6px 8px; margin: 4px 0 6px; border-radius: 6px; background: rgba(245, 159, 0, 0.12); border: 1px solid rgba(245, 159, 0, 0.35); }
+
+/* BA edition: a step auto mode refused, with the way through */
+.auto-blocked { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 6px 12px; padding: 8px 10px; font-size: 12.5px; border-radius: 8px; background: rgba(245, 159, 0, 0.12); border: 1px solid rgba(245, 159, 0, 0.4); }
+.auto-blocked > span:first-child { flex: 1; min-width: 220px; }

@@ -925,7 +925,8 @@ export async function runActionAnywhere(a0: BaAction): Promise<{ ok: true; key: 
 export function runAction(a: BaAction): { ok: true; key: string } | { ok: false; error: string } {
   const built = buildAction(a);
   if (!built.ok) return built;
-  const key = startAgent({ cwd: built.cwd, permissionMode: "auto", prompt: built.prompt, title: built.title });
+  // Production writes on the Qargo MCP are refused by auto mode's safety check, so a prod session asks you instead.
+  const key = startAgent({ cwd: built.cwd, permissionMode: a.tenant === "prod" ? "default" : "auto", prompt: built.prompt, title: built.title });
   if (a.url && /notion\.(so|com)/.test(a.url)) {
     db.query("INSERT INTO ba_ir_sessions (ir_url, project_id, agent_key, kind, title, started_at) VALUES (?, ?, ?, ?, ?, ?)").run(a.url, a.projectId ?? null, key, a.kind, built.title, Date.now());
   }

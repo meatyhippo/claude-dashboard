@@ -1,3 +1,5 @@
+import { baFlags } from "../baFlags.ts";
+import AutoBlocked from "./AutoBlocked.tsx";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   agentApi,
@@ -1055,6 +1057,7 @@ export function LiveConversation({
         </div>
       )}
 
+      {baFlags.enabled && <AutoBlocked agentKey={agentKey} timeline={data.timeline} mode={data.permissionMode} ended={!!ended} />}
       <div className="composer-wrap">
         {/* Standing in for the TUI's /skills browser, which cannot exist here:
             these are the commands the session itself reports as available. */}
