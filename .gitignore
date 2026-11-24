@@ -15,3 +15,6 @@ build/
 # outside this tree, but nothing stops a future script from wanting a .env
 .env
 .env.*
+
+# sessions handed between colleagues hold whole transcripts; never commit one
+*.claudesession

@@ -121,6 +121,27 @@ export function PlusIcon() {
   );
 }
 
+/** A paper plane: hand something to someone else. */
+export function SendIcon() {
+  return (
+    <I>
+      <path d="M14.5 21.5a.5.5 0 0 0 .94-.03l6.5-19a.5.5 0 0 0-.64-.64l-19 6.5a.5.5 0 0 0-.03.94l7.93 3.18a2 2 0 0 1 1.11 1.11z" />
+      <path d="m21.85 2.15-10.94 10.94" />
+    </I>
+  );
+}
+
+/** An arrow down into a tray: take something in. */
+export function ImportIcon() {
+  return (
+    <I>
+      <path d="M12 3v12" />
+      <path d="m7 10 5 5 5-5" />
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    </I>
+  );
+}
+
 export function EditorIcon() {
   return (
     <I>

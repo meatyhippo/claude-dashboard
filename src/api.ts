@@ -1315,6 +1315,44 @@ async function postResult<T extends { ok: boolean; error: string | null }>(
   return { ok: false, error: data.error ?? `${path} → ${res.status}` } as T;
 }
 
+export type TransferPreview = {
+  title: string | null;
+  messages: number;
+  mcpServers: string[];
+  files: number;
+  bytes: number;
+  large: boolean;
+  secrets: { label: string; count: number }[];
+};
+
+/** Handing a session to a colleague as one `.claudesession` file. */
+export const transferApi = {
+  preview: (sessionId: string) => get<TransferPreview>(`/api/transfer/preview?id=${encodeURIComponent(sessionId)}`),
+  /** Writes the file to ~/Downloads, shows it in Finder and brings Slack forward. */
+  export: (sessionId: string) => post<{ path: string }>("/api/transfer/export", { sessionId }),
+  /** People matching a name, through the Slack connector on the user's claude.ai account. */
+  slackPeople: (query: string) =>
+    post<{ people: { id: string; name: string; email: string; title: string }[] }>("/api/transfer/slack/people", { query }),
+  /** Uploads the session file and shares it in a DM with that person. Takes ~30 s. */
+  slackSend: (sessionId: string, userId: string, comment: string) =>
+    post<{ to: string; channel: string; link: string | null; name: string }>("/api/transfer/slack/send", {
+      sessionId,
+      userId,
+      comment,
+    }),
+  import: async (file: File, folder?: string) => {
+    const q = folder?.trim() ? `?folder=${encodeURIComponent(folder.trim())}` : "";
+    const res = await fetch(`/api/transfer/import${q}`, {
+      method: "POST",
+      headers: { "content-type": "application/octet-stream" },
+      body: file,
+    });
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
+    if (!res.ok) throw new Error(data.error ?? `import failed (${res.status})`);
+    return data as { sessionId: string; cwd: string; title: string | null };
+  },
+};
+
 export const agentApi = {
   list: () => get<{ agents: AgentSummary[]; restorable: Restorable[] }>("/api/agents"),
   restore: (sessionId: string) => post<{ key: string }>("/api/agents/restore", { sessionId }),
@@ -1524,6 +1562,10 @@ async function errorText(res: Response, path: string): Promise<string> {
 }
 
 export const api = {
+  health: () =>
+    get<{ ok: boolean; claudeHome: string; claudeHomeSource: "CLAUDE_HOME" | "CLAUDE_CONFIG_DIR" | "settings" | "default" }>(
+      "/api/health",
+    ),
   live: () => get<LivePayload>("/api/live"),
   usage: () => get<UsagePayload>("/api/usage"),
   overview: () => get<Overview>("/api/overview"),
@@ -1562,10 +1604,6 @@ export const api = {
   renameSession: (id: string, title: string) =>
     post(`/api/sessions/${encodeURIComponent(id)}/rename`, { title }),
 };
-  health: () =>
-    get<{ ok: boolean; claudeHome: string; claudeHomeSource: "CLAUDE_HOME" | "CLAUDE_CONFIG_DIR" | "settings" | "default" }>(
-      "/api/health",
-    ),
 
 // ── formatting ────────────────────────────────────────────────────────────────
 export function fmtTokens(n: number): string {

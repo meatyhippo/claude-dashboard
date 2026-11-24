@@ -35,6 +35,8 @@ import {
   type ImageMediaType,
   type InboundImage,
 } from "./agents.ts";
+import { exportSession, importSession, previewExport } from "./sessionTransfer.ts";
+import { findSlackPeople, sendViaSlack } from "./slackSend.ts";
 import {
   addComment,
   buildPrompt,
@@ -116,10 +118,10 @@ import {
 import {
   ARTIFACT_PORT,
   artifactsDir,
-  setArtifactsDir,
-  setDrawingsDir,
   CLAUDE_HOME,
   CLAUDE_HOME_SOURCE,
+  setArtifactsDir,
+  setDrawingsDir,
   setNotesDir,
   setProjectsDir,
   notesDir,
@@ -277,7 +279,7 @@ const NOTIFY_KINDS: NotifyEventKind[] = [
   "calendarStarting",
 ];
 import { sessionReceipt, usageSummary } from "./usage.ts";
-import { applyBaEditionOnce } from "./baEdition.ts";
+import { applyBaEditionOnce, getBaFlags } from "./baEdition.ts";
 import { dropConnectorCalendar, withConnectorStatus } from "./baCalendar.ts";
 import { handleBaRoute, initBaCustomers } from "./baCustomers.ts";
 
@@ -1308,6 +1310,47 @@ const server = Bun.serve<PtyData, never>({
       // A missing directory is a different failure from a missing session: the
       // session is known, its checkout is not there any more.
       return json({ error: r.error }, r.error === "unknown session" ? 404 : 409);
+    }
+
+    // Handing a session to a colleague: preview what the file will hold, write it,
+    // and take one in. Import only lays the files down; the caller resumes it like
+    // any History row, so there is one way a session gets started.
+    if (p.startsWith("/api/transfer/")) {
+      const f = getBaFlags();
+      if (!f.enabled || !f.handoff) return json({ error: "session handoff is off (Settings → BA edition)" }, 404);
+    }
+    if (p === "/api/transfer/preview" && req.method === "GET") {
+      const preview = previewExport(url.searchParams.get("id") ?? "");
+      return preview ? json(preview) : json({ error: "no transcript for that session" }, 404);
+    }
+    if (p === "/api/transfer/export" && req.method === "POST") {
+      const body = (await req.json().catch(() => ({}))) as { sessionId?: string };
+      const r = exportSession(body.sessionId ?? "");
+      return r ? json(r) : json({ error: "no transcript for that session" }, 404);
+    }
+    if (p === "/api/transfer/slack/people" && req.method === "POST") {
+      const body = (await req.json().catch(() => ({}))) as { query?: string };
+      try {
+        return json({ people: await findSlackPeople(body.query ?? "") });
+      } catch (err) {
+        return json({ error: err instanceof Error ? err.message : String(err) }, 502);
+      }
+    }
+    if (p === "/api/transfer/slack/send" && req.method === "POST") {
+      const body = (await req.json().catch(() => ({}))) as { sessionId?: string; userId?: string; comment?: string };
+      try {
+        return json(await sendViaSlack(body.sessionId ?? "", body.userId ?? "", body.comment ?? ""));
+      } catch (err) {
+        return json({ error: err instanceof Error ? err.message : String(err) }, 502);
+      }
+    }
+    if (p === "/api/transfer/import" && req.method === "POST") {
+      try {
+        const folder = expand(url.searchParams.get("folder")?.trim() ?? "") || undefined;
+        return json(importSession(new Uint8Array(await req.arrayBuffer()), folder));
+      } catch (err) {
+        return json({ error: err instanceof Error ? err.message : String(err) }, 400);
+      }
     }
 
     if (p === "/api/agents/forget" && req.method === "POST") {

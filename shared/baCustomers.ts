@@ -320,9 +320,11 @@ export type BaFlags = {
   calendar: boolean;
   /** BA session buttons start a cloud session (claude.ai/code) in a terminal instead of a session on this Mac. */
   cloudSessions: boolean;
+  /** Send a session to a colleague over Slack, and import one they sent. */
+  handoff: boolean;
 };
 
-export const DEFAULT_BA_FLAGS: BaFlags = { enabled: false, feedback: false, customers: true, inbox: true, delivery: true, qai: true, diagrams: true, published: true, qargoMcp: true, calendar: true, cloudSessions: false };
+export const DEFAULT_BA_FLAGS: BaFlags = { enabled: false, feedback: false, customers: true, inbox: true, delivery: true, qai: true, diagrams: true, published: true, qargoMcp: true, calendar: true, cloudSessions: false, handoff: true };
 
 export const BA_FLAG_INFO: { key: Exclude<keyof BaFlags, "enabled">; label: string; hint: string }[] = [
   { key: "customers", label: "Customers from Notion", hint: "Projects become customers: My deals, Requirements and Front tabs, IR workspaces" },
@@ -334,6 +336,7 @@ export const BA_FLAG_INFO: { key: Exclude<keyof BaFlags, "enabled">; label: stri
   { key: "qargoMcp", label: "Build on the Qargo MCP", hint: "Create integration / mapping / visibility from an IR (test tenant by default)" },
   { key: "diagrams", label: "Qargo diagrams", hint: "Excalidraw styleguide: landscape template, shape library, style check, customer export" },
   { key: "published", label: "Published artifacts", hint: "Your claude.ai artifacts beside the local ones and on customer pages" },
+  { key: "handoff", label: "Session handoff", hint: "Send a session to a colleague in a Slack DM from its ⋮ menu; they import it from History and carry on" },
   { key: "feedback", label: "Feedback mode", hint: "A Feedback button that pins notes to any part of the page, saved for the next round of changes" },
 ];
 
