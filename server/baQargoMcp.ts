@@ -1,3 +1,5 @@
+import { claudeEnv } from "./paths.ts";
+
 /**
  * Whether the Qargo MCP connectors (qargo-mcp-test, qargo-mcp-prod) can be used
  * from a session. They are claude.ai connectors, each signed in on its own: one
@@ -22,7 +24,7 @@ const stateOf = (out: string, name: string): McpState => {
 
 async function check(): Promise<QargoMcpStatus> {
   try {
-    const p = Bun.spawn(["claude", "mcp", "list"], { cwd: process.env.HOME, stdout: "pipe", stderr: "pipe" });
+    const p = Bun.spawn(["claude", "mcp", "list"], { cwd: process.env.HOME, env: claudeEnv({ NO_COLOR: "1" }), stdout: "pipe", stderr: "pipe" });
     const kill = setTimeout(() => p.kill(), 60_000);
     const out = await new Response(p.stdout).text();
     clearTimeout(kill);

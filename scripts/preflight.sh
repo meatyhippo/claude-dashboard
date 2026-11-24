@@ -52,7 +52,10 @@ has_notifier() { have terminal-notifier; }
 has_tmux()    { have tmux; }
 has_python3() { have python3; }
 has_docker()  { have docker && docker compose version >/dev/null 2>&1; }
-has_claude_home() { [ -d "${CLAUDE_HOME:-$HOME/.claude}" ]; }
+# Same order as server/paths.ts, minus the saved setting: CLAUDE_HOME, then
+# CLAUDE_CONFIG_DIR (a second Claude account), then the default profile.
+claude_home() { echo "${CLAUDE_HOME:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}"; }
+has_claude_home() { [ -d "$(claude_home)" ]; }
 
 port_busy() {
   have lsof || return 1   # no lsof: assume free rather than block the install

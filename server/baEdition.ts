@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { BA_REFRESH_CHOICES, DEFAULT_BA_FLAGS, DEFAULT_BA_MODELS, type BaFlags, type BaModels } from "../shared/baCustomers.ts";
 import { blankSchedule, blankTemplate, type Template } from "../shared/templates.ts";
-import { DATA_DIR } from "./paths.ts";
+import { CLAUDE_HOME, DATA_DIR } from "./paths.ts";
 import { getSettings, updateSettings } from "./settings.ts";
 
 /**
@@ -137,7 +137,7 @@ export function mailStyleBlock(): string {
   const own = getMailStyle().trim();
   let global = "";
   try {
-    const p = join(process.env.HOME ?? "", ".claude", "CLAUDE.md");
+    const p = join(CLAUDE_HOME, "CLAUDE.md");
     if (existsSync(p)) global = readFileSync(p, "utf8").trim().slice(0, 6000);
   } catch {
     /* unreadable: the dashboard's own copy still applies */

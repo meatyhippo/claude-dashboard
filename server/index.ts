@@ -118,6 +118,8 @@ import {
   artifactsDir,
   setArtifactsDir,
   setDrawingsDir,
+  CLAUDE_HOME,
+  CLAUDE_HOME_SOURCE,
   setNotesDir,
   setProjectsDir,
   notesDir,
@@ -1997,7 +1999,15 @@ const server = Bun.serve<PtyData, never>({
       }
     }
 
-    if (p === "/api/health") return json({ ok: true, projectsDir: PROJECTS_DIR, pid: process.pid, ...RELEASE });
+    if (p === "/api/health")
+      return json({
+        ok: true,
+        projectsDir: PROJECTS_DIR,
+        claudeHome: CLAUDE_HOME,
+        claudeHomeSource: CLAUDE_HOME_SOURCE,
+        pid: process.pid,
+        ...RELEASE,
+      });
 
     // ── settings ─────────────────────────────────────────────────────────────
     if (p === "/api/settings") {

@@ -3,6 +3,7 @@ import BaEditionSettings from "./BaEditionSettings.tsx";
 import { FoldersModal } from "./FoldersModal.tsx";
 import { useEffect, useRef, useState } from "react";
 import {
+  api,
   configApi,
   modelApi,
   settingsApi,
@@ -238,6 +239,8 @@ export function SettingsView({
             </div>
           </div>
         )}
+
+        {section === "sessions" && <ClaudeProfilePanel settings={settings} save={save} />}
 
         {(() => {
           if (section !== "sessions") return null;
@@ -564,6 +567,53 @@ export function SettingsView({
         {section === "mcp" && <McpPanel />}
         {section === "ba" && <BaEditionSettings />}
       </div>
+    </div>
+  );
+}
+
+const PROFILE_SOURCE: Record<string, string> = {
+  CLAUDE_HOME: "set by CLAUDE_HOME in the daemon's environment, which overrides this field",
+  CLAUDE_CONFIG_DIR: "set by CLAUDE_CONFIG_DIR in the daemon's environment, which overrides this field",
+  settings: "from this field",
+  default: "the default",
+};
+
+/**
+ * Which Claude Code profile the dashboard follows: the folder CLAUDE_CONFIG_DIR
+ * names when two accounts run side by side. Shown next to what the daemon is
+ * actually using, because the field only applies after a restart.
+ */
+function ClaudeProfilePanel({ settings, save }: { settings: Settings; save: (patch: SettingsPatch) => void }) {
+  const [active, setActive] = useState<{ dir: string; source: string } | null>(null);
+  useEffect(() => {
+    api
+      .health()
+      .then((h) => setActive({ dir: h.claudeHome, source: h.claudeHomeSource }))
+      .catch(() => {});
+  }, []);
+  return (
+    <div className="panel">
+      <h2>Claude Code profile</h2>
+      <p className="hint">
+        The folder Claude Code keeps its login, sessions and transcripts in. Leave it empty for <code>~/.claude</code>; if you
+        run a second account with <code>CLAUDE_CONFIG_DIR</code>, pick that folder instead. Sessions started here run on
+        the same profile. Restart the dashboard after changing it.
+      </p>
+      <div style={{ maxWidth: 520 }}>
+        <FolderField
+          label="Profile folder"
+          value={settings.ui.claudeHome ?? ""}
+          placeholder="~/.claude (default)"
+          onChange={(v) => save({ ui: { claudeHome: v } })}
+          pickerTitle="Pick the Claude Code profile folder"
+          pickerHint="The folder that holds projects/ and sessions/, such as ~/.claude-work."
+        />
+      </div>
+      {active && (
+        <p className="hint">
+          Using <code>{active.dir}</code>, {PROFILE_SOURCE[active.source] ?? active.source}.
+        </p>
+      )}
     </div>
   );
 }

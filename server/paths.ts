@@ -1,17 +1,61 @@
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { DRAWING_EXT, isDrawingSlug } from "../shared/drawings.ts";
 import { isNotePath, notePathIn } from "../shared/notes.ts";
 import { projectFileId } from "../shared/projectFiles.ts";
 
-/** Claude Code's own state. We only ever READ from here. */
-export const CLAUDE_HOME = process.env.CLAUDE_HOME ?? join(homedir(), ".claude");
-export const SESSIONS_DIR = join(CLAUDE_HOME, "sessions");
-export const PROJECTS_DIR = join(CLAUDE_HOME, "projects");
-
 /** Our own state, deliberately outside ~/.claude so we never corrupt Claude Code. */
 export const DATA_DIR = process.env.DASHBOARD_HOME ?? join(homedir(), ".claude-dashboard");
 export const DB_PATH = join(DATA_DIR, "index.db");
+
+const DEFAULT_CLAUDE_HOME = join(homedir(), ".claude");
+
+function expandHome(p: string): string {
+  return resolve(p.trim().replace(/^~(?=$|\/)/, homedir()));
+}
+
+/**
+ * `ui.claudeHome` from settings.json, read raw at boot.
+ *
+ * Raw because settings.ts imports this module, and because every reader of
+ * CLAUDE_HOME captures it at load: changing the setting takes a restart, so
+ * reading it once here is the whole contract.
+ */
+function savedClaudeHome(): string | null {
+  try {
+    const v = (JSON.parse(readFileSync(join(DATA_DIR, "settings.json"), "utf8")) as { ui?: { claudeHome?: unknown } }).ui
+      ?.claudeHome;
+    return typeof v === "string" && v.trim() ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Which Claude Code profile the dashboard follows.
+ *
+ * Claude Code itself moves everything — login, sessions, transcripts, skills,
+ * plugins — when CLAUDE_CONFIG_DIR is set, which is how two accounts run side by
+ * side. Env wins over the saved setting so a second instance can follow the other
+ * profile for one run (`CLAUDE_HOME=~/.claude bun run dev:beside`).
+ */
+function pickClaudeHome(): { dir: string; source: "CLAUDE_HOME" | "CLAUDE_CONFIG_DIR" | "settings" | "default" } {
+  if (process.env.CLAUDE_HOME?.trim()) return { dir: expandHome(process.env.CLAUDE_HOME), source: "CLAUDE_HOME" };
+  if (process.env.CLAUDE_CONFIG_DIR?.trim())
+    return { dir: expandHome(process.env.CLAUDE_CONFIG_DIR), source: "CLAUDE_CONFIG_DIR" };
+  const saved = savedClaudeHome();
+  if (saved) return { dir: expandHome(saved), source: "settings" };
+  return { dir: DEFAULT_CLAUDE_HOME, source: "default" };
+}
+
+const picked = pickClaudeHome();
+
+/** Claude Code's own state. We only ever READ from here. */
+export const CLAUDE_HOME = picked.dir;
+export const CLAUDE_HOME_SOURCE = picked.source;
+export const SESSIONS_DIR = join(CLAUDE_HOME, "sessions");
+export const PROJECTS_DIR = join(CLAUDE_HOME, "projects");
 
 export const PORT = Number(process.env.PORT ?? 5757);
 
@@ -24,9 +68,18 @@ export const PORT = Number(process.env.PORT ?? 5757);
  * read the login out of the macOS Keychain and every turn answers "Not logged in"
  * in ~50ms without an API call. The daemon inherits whatever the launching shell
  * happened to have, so it is pinned here rather than left to how it was started.
+ *
+ * CLAUDE_CONFIG_DIR is pinned for the same reason: a session must run on the
+ * profile whose transcripts the dashboard reads, or it starts on one account and
+ * lands its history where nothing is looking. For the default profile it is
+ * removed rather than set to ~/.claude, so the session starts exactly like a plain
+ * `claude` in a terminal: the CLI picks its Keychain login by this variable.
  */
 export function claudeEnv(extra?: Record<string, string>): Record<string, string | undefined> {
-  return { ...process.env, ...extra, XPC_FLAGS: "0x0" };
+  const env: Record<string, string | undefined> = { ...process.env, ...extra, XPC_FLAGS: "0x0" };
+  if (CLAUDE_HOME === DEFAULT_CLAUDE_HOME) delete env.CLAUDE_CONFIG_DIR;
+  else env.CLAUDE_CONFIG_DIR = CLAUDE_HOME;
+  return env;
 }
 
 /** ~/.claude/projects dirs are the cwd with / replaced by -; recover a display path. */

@@ -399,6 +399,8 @@ export type Settings = {
     drawingsRoot: string;
     notesRoot: string;
     projectsRoot?: string;
+    /** Claude Code profile folder; empty means ~/.claude. Takes a daemon restart. */
+    claudeHome?: string;
     /** Hide tool calls and thinking in conversations. */
     hideToolCalls: boolean;
     /** Dock pages turned off, by key. Absent means all of them are on. */
@@ -1560,6 +1562,10 @@ export const api = {
   renameSession: (id: string, title: string) =>
     post(`/api/sessions/${encodeURIComponent(id)}/rename`, { title }),
 };
+  health: () =>
+    get<{ ok: boolean; claudeHome: string; claudeHomeSource: "CLAUDE_HOME" | "CLAUDE_CONFIG_DIR" | "settings" | "default" }>(
+      "/api/health",
+    ),
 
 // ── formatting ────────────────────────────────────────────────────────────────
 export function fmtTokens(n: number): string {
