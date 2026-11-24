@@ -222,7 +222,8 @@ function topSessions(db: Database, cfg: Config, since: number, limit = 8) {
   );
   return top.map(([id, v]) => ({
     id,
-    title: meta.get(id)?.title ?? null,
+    // BA edition: headless connector reads and drafts, recorded by baConnector.trackUsage.
+    title: meta.get(id)?.title ?? (id === "ba-background" ? "Dashboard background reads (connectors, drafts)" : null),
     cwd: meta.get(id)?.cwd ?? null,
     ...v,
   }));

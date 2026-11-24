@@ -2,12 +2,18 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { replyOf, type CalendarEvent } from "../shared/calendar.ts";
 import { listEvents } from "./calendarSources.ts";
+import { connectorCalendarOn } from "./baCalendar.ts";
 import { fireEvent } from "./notify.ts";
 import { DATA_DIR } from "./paths.ts";
 import { getSettings } from "./settings.ts";
 
 const STORE_PATH = join(DATA_DIR, "calendar-watch.json");
 const REFRESH_MS = 2 * 60_000;
+// BA edition: each read of the claude.ai calendar connector is a model call, so read it
+// less often, only in working hours, and over an hour-aligned range that the cache can reuse.
+const CONNECTOR_REFRESH_MS = 15 * 60_000;
+const HOUR_MS = 60 * 60_000;
+let lastRead = 0;
 const TICK_MS = 20_000;
 const FIRST_REFRESH_MS = 5_000;
 const INVITE_HORIZON_MS = 30 * 24 * 60 * 60_000;
@@ -90,7 +96,14 @@ async function refresh() {
     return;
   }
   const now = Date.now();
-  const { events, errors } = await listEvents(now, now + INVITE_HORIZON_MS);
+  let from = now;
+  if (connectorCalendarOn()) {
+    const h = new Date(now).getHours();
+    if (lastRead && (h < 7 || h >= 20 || now - lastRead < CONNECTOR_REFRESH_MS - 5_000)) return;
+    from = Math.floor(now / HOUR_MS) * HOUR_MS;
+  }
+  lastRead = now;
+  const { events, errors } = await listEvents(from, from + INVITE_HORIZON_MS);
   cached = watched(events, getSettings().ui.calendarHidden ?? []);
   const { fresh, known } = newInvites(cached, state().invites, errors.length === 0);
   keep({ ...state(), invites: known });

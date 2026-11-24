@@ -31,6 +31,30 @@ export function initConnector(database: Database) {
   db.exec(`CREATE TABLE IF NOT EXISTS ba_cache (key TEXT PRIMARY KEY, json TEXT, error TEXT, fetched_at INTEGER NOT NULL);`);
 }
 
+/** Session id under which background model calls show on the Usage page. */
+export const BACKGROUND_SESSION = "ba-background";
+
+/**
+ * Headless calls keep no transcript, so the indexer never sees them. Record each
+ * API request they make in usage_events, so the Usage page counts them too.
+ */
+export function trackUsage(msg: any): void {
+  if (msg?.type !== "assistant" || !db) return;
+  const m = msg.message;
+  const u = m?.usage;
+  if (!m?.id || !u) return;
+  try {
+    const cw5 = u.cache_creation?.ephemeral_5m_input_tokens ?? 0;
+    const cw1 = u.cache_creation?.ephemeral_1h_input_tokens ?? 0;
+    db.query(
+      `INSERT OR IGNORE INTO usage_events (uuid, session_id, ts, model, input_tokens, output_tokens, cache_read, cache_write, request_id, cache_write_5m, cache_write_1h, src_path)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(m.id, BACKGROUND_SESSION, Date.now(), m.model ?? null, u.input_tokens ?? 0, u.output_tokens ?? 0, u.cache_read_input_tokens ?? 0, u.cache_creation_input_tokens ?? 0, m.id, cw5, cw1, "ba:background");
+  } catch {
+    /* usage is informative only */
+  }
+}
+
 /** One exact tool call on the sync model (Haiku by default), retried on Sonnet if allowed. Returns the tool's raw result text. */
 export async function connectorCall(tool: string, input: unknown, reason: string): Promise<string> {
   mkdirSync(SCRATCH_DIR, { recursive: true });
@@ -73,7 +97,10 @@ async function oneCallInner(model: string, tool: string, input: unknown, reason:
       env: claudeEnv(),
       cwd: SCRATCH_DIR,
       model,
-      maxTurns: 4,
+      // Turn 1 loads the tool, turn 2 calls it; the result arrives before a third
+      // turn, so the model's sign-off is never paid for.
+      maxTurns: 2,
+      maxThinkingTokens: 0,
       persistSession: false,
       settingSources: ["user"],
       skills: [],
@@ -87,6 +114,7 @@ async function oneCallInner(model: string, tool: string, input: unknown, reason:
   let result: string | null = null;
   let toolError: string | null = null;
   for await (const msg of q as AsyncIterable<any>) {
+    trackUsage(msg);
     if (msg.type === "assistant") {
       for (const c of msg.message?.content ?? []) if (c.type === "tool_use" && c.name === tool) pending.add(c.id);
     } else if (msg.type === "user") {
@@ -113,8 +141,10 @@ async function oneCallInner(model: string, tool: string, input: unknown, reason:
  * ("<persisted-output> … Full output saved to: /path"). Read the file instead.
  */
 function unpersist(text: string): string {
-  if (!text.includes("<persisted-output>")) return text;
-  const path = text.match(/saved to:\s*(\S+\.(?:txt|json))/)?.[1];
+  // Two wordings: "<persisted-output> … Full output saved to: /path" and, for an over-limit
+  // MCP result, "Error: result (N characters) exceeds maximum allowed tokens. Output has been saved to /path."
+  if (!text.includes("<persisted-output>") && !/exceeds maximum allowed tokens/.test(text.slice(0, 400))) return text;
+  const path = text.match(/saved to:?\s*(\/\S+?\.(?:txt|json))\.?(?:\s|$)/)?.[1];
   if (!path || !existsSync(path)) return text;
   const body = readFileSync(path, "utf8");
   // Saved MCP results may be the content blocks rather than the text in them.
@@ -155,6 +185,7 @@ async function batchInner<I>(tool: string, inputs: I[], keyOf: (input: I) => str
       cwd: SCRATCH_DIR,
       model: getBaModels().sync,
       maxTurns: 6,
+      maxThinkingTokens: 0,
       persistSession: false,
       settingSources: ["user"],
       skills: [],
@@ -166,6 +197,7 @@ async function batchInner<I>(tool: string, inputs: I[], keyOf: (input: I) => str
   });
   const byId = new Map<string, string>();
   for await (const msg of q as AsyncIterable<any>) {
+    trackUsage(msg);
     if (msg.type === "assistant") {
       for (const c of msg.message?.content ?? []) if (c.type === "tool_use" && c.name === tool) byId.set(c.id, keyOf(c.input as I));
     } else if (msg.type === "user") {

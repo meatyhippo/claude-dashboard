@@ -1,7 +1,7 @@
 import { getBaModels, mailStyleBlock } from "./baEdition.ts";
 import type { BaFrontThread, BaMailEntry, BaMailThread, BaMailView, BaReply, BaTriageThread, Cached } from "../shared/baCustomers.ts";
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { cached, connectorBatch, connectorCall, FRONT_SEARCH, parseJson, peekCache, recordShape } from "./baConnector.ts";
+import { cached, connectorBatch, connectorCall, FRONT_SEARCH, parseJson, peekCache, recordShape, trackUsage } from "./baConnector.ts";
 import { claudeEnv, SCRATCH_DIR } from "./paths.ts";
 import { cleanMail } from "../shared/mailClean.ts";
 import { saveAttachments } from "./baAttachments.ts";
@@ -394,6 +394,7 @@ export async function suggestReply(id: string, context: string[], instructions: 
   });
   try {
     for await (const msg of q as AsyncIterable<any>) {
+      trackUsage(msg);
       if (msg.type === "result") {
         if (msg.subtype !== "success") throw new Error("Claude could not draft a reply");
         return String(msg.result ?? "").trim();
@@ -427,6 +428,7 @@ export async function keyPoints(id: string): Promise<KeyPoints> {
       options: { env: claudeEnv(), cwd: SCRATCH_DIR, model: getBaModels().keyPoints, systemPrompt: KEY_SYSTEM, maxTurns: 1, tools: [], mcpServers: {}, settingSources: [], persistSession: false, abortController: stop },
     });
     for await (const msg of q as AsyncIterable<any>) {
+      trackUsage(msg);
       if (msg.type === "result") {
         // Models sometimes wrap JSON in a code block or add a sentence: take the outermost object.
         const out = String(msg.result ?? "");
