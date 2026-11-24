@@ -4,6 +4,7 @@ import { FileTree } from "./FileTree.tsx";
 import { QuickOpen } from "./QuickOpen.tsx";
 import { SearchView } from "./SearchView.tsx";
 import { TerminalDock } from "./TerminalDock.tsx";
+import SheetView, { isSheet } from "./SheetView.tsx";
 
 /** The editor is large, so it is fetched the first time a file is opened and not with the app. */
 const MonacoEditor = lazy(() => import("./MonacoEditor.tsx"));
@@ -287,7 +288,10 @@ export function Workbench({
         <div className="wb-stage">
           {view && <div className="wb-view">{view.render()}</div>}
           <Suspense fallback={activePath ? <div className="empty">Loading the editor…</div> : null}>
-            {layout.files.map((path) => (
+            {layout.files.map((path) =>
+              isSheet(path) ? (
+                <SheetView key={path} cwd={cwd} path={path} visible={activePath === path} />
+              ) : (
               <MonacoEditor
                 key={path}
                 cwd={cwd}
@@ -297,7 +301,8 @@ export function Workbench({
                 reveal={reveal?.path === path ? reveal : null}
                 onState={(state) => onEditorState(path, state)}
               />
-            ))}
+              ),
+            )}
           </Suspense>
         </div>
 

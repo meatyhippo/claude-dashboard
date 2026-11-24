@@ -618,37 +618,53 @@ export default function InboxView({ onOpen }: { onOpen: (key: string) => void })
             {busy === view ? "…" : "↻"}
           </button>
         </div>
-        <div className="mb-list-sub ba-muted">
-          <span>
-            {VIEWS.find((v) => v.key === view)?.label}
-            {customerFilter !== null ? ` · ${nameOf(customerFilter)}` : ""} · {mail ? `updated ${ago(mail.fetchedAt)}` : "loading…"}
-          </span>
+        <div className="mb-list-sub">
+          <div className="mb-meta">
+            <span>
+              <strong>{VIEWS.find((v) => v.key === view)?.label}</strong>
+              {customerFilter !== null ? ` · ${nameOf(customerFilter)}` : ""}
+            </span>
+            <span className="ba-muted">
+              {mail?.pending ? (
+                <span className="mb-reading" title="Senders and reply state fill in once each conversation is read">
+                  <span className="mb-spin" /> reading {mail.pending}
+                </span>
+              ) : mail ? (
+                `updated ${ago(mail.fetchedAt)}`
+              ) : (
+                "loading…"
+              )}
+            </span>
+          </div>
           {mail?.data && (
-            <span className="mb-states">
-              <span title="Not opened here since its last message">
+            <div className="mb-chips">
+              <span className="mb-chip static" title="Not opened here since its last message">
                 <span className="mb-state unread" /> {states.unread} unread
               </span>
-              <span title="The last message is from the customer">
-                <span className="mb-state needs" /> {states.needs} need a reply
-              </span>
-              <span title="The last message is from Qargo">
+              {view !== "placed" ? (
+                <button className={`mb-chip ${onlyNeeds ? "on" : ""}`} title="The last message is from the customer · click to show only these" onClick={() => setOnlyNeeds(!onlyNeeds)}>
+                  <span className="mb-state needs" /> {states.needs} to reply
+                </button>
+              ) : (
+                <span className="mb-chip static" title="The last message is from the customer">
+                  <span className="mb-state needs" /> {states.needs} to reply
+                </span>
+              )}
+              <span className="mb-chip static" title="The last message is from Qargo">
                 <span className="mb-state replied" /> {states.replied} replied
               </span>
-              {mail.pending ? <span title="Senders and reply state fill in once each conversation is read">· fetching details of {mail.pending}…</span> : null}
-            </span>
-          )}
-          {view !== "placed" && (
-            <span className="mb-filters">
-              <label>
-                <input type="checkbox" checked={onlyNeeds} onChange={(e) => setOnlyNeeds(e.target.checked)} /> Needs a reply
-              </label>
-              <label>
-                <input type="checkbox" checked={onlyTodo} onChange={(e) => setOnlyTodo(e.target.checked)} /> To triage ({todo})
-              </label>
-              <label title="Placed automatically: check them, Unplace teaches the rules">
-                <input type="checkbox" checked={onlyAuto} onChange={(e) => setOnlyAuto(e.target.checked)} /> <BoltIcon /> Auto ({(mail?.data ?? []).filter((t) => t.link_?.source === "auto").length})
-              </label>
-            </span>
+              {view !== "placed" && (
+                <>
+                  <span className="mb-chip-sep" />
+                  <button className={`mb-chip ${onlyTodo ? "on" : ""}`} title="Not placed at a customer yet" onClick={() => setOnlyTodo(!onlyTodo)}>
+                    To triage {todo}
+                  </button>
+                  <button className={`mb-chip ${onlyAuto ? "on" : ""}`} title="Placed automatically: check them, Unplace teaches the rules" onClick={() => setOnlyAuto(!onlyAuto)}>
+                    <BoltIcon /> Auto {(mail?.data ?? []).filter((t) => t.link_?.source === "auto").length}
+                  </button>
+                </>
+              )}
+            </div>
           )}
         </div>
         {mail?.error && <div className="chat-error">{mail.error}</div>}

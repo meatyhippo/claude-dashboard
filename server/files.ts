@@ -314,6 +314,9 @@ function isDir(p: string): boolean {
   }
 }
 
+/** BA edition: the same path checks, for viewers that read a file themselves (spreadsheets). */
+export const locateFile = (cwd: string, path: string) => locate(cwd, path);
+
 export async function readFile(cwd: string, path: string): Promise<FileRead> {
   const found = await locate(cwd, path);
   if ("error" in found) return { ok: false, path, content: "", hash: "", error: found.error };

@@ -63,7 +63,8 @@ import {
   scratchDir,
 } from "./dirs.ts";
 import {
-  grepFolder, browse as browseFiles, readFile, writeFile } from "./files.ts";
+  grepFolder, browse as browseFiles, readFile, writeFile, locateFile } from "./files.ts";
+import { readSheets } from "./baSheet.ts";
 import {
   branchFiles,
   grep as gitGrep,
@@ -2560,6 +2561,21 @@ const server = Bun.serve<PtyData, never>({
           q: url.searchParams.get("q") ?? undefined,
         }),
       );
+    }
+
+    // BA edition: a spreadsheet in the workbench, read-only, or opened in the Mac's own app.
+    if (p === "/api/files/sheet" || p === "/api/files/sheet/open") {
+      const cwd = url.searchParams.get("cwd");
+      const path = url.searchParams.get("path");
+      if (!cwd || !path) return json({ error: "cwd and path are required" }, 400);
+      const found = await locateFile(cwd, path);
+      if ("error" in found) return json({ ok: false, sheets: [], error: found.error }, 400);
+      if (p === "/api/files/sheet/open") {
+        if (req.method !== "POST") return json({ error: "POST only" }, 405);
+        Bun.spawn(["open", found.abs], { stdout: "ignore", stderr: "ignore" });
+        return json({ ok: true });
+      }
+      return json(await readSheets(found.abs));
     }
 
     // ── one file, for the editor in the diff panel ───────────────────────────

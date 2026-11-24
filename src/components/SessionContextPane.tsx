@@ -69,6 +69,29 @@ const blocksOf = (md: string) =>
     .map((b) => b.trim())
     .filter(Boolean);
 
+/**
+ * A ticket split at its headings into sections. A long ticket opens with only its
+ * short sections expanded, so it reads as a list of headings, not one long page.
+ */
+type TicketSection = { title: string | null; blocks: string[]; size: number };
+const sectionsOf = (blocks: string[]): TicketSection[] => {
+  const out: TicketSection[] = [];
+  for (const b of blocks) {
+    const heading = b.match(/^#{1,3}\s+(.+)/);
+    if (heading || out.length === 0) out.push({ title: heading ? heading[1]!.replace(/[*_`]/g, "").trim() : null, blocks: [], size: 0 });
+    const cur = out[out.length - 1]!;
+    // The heading becomes the section's summary; keep any text that came with it in the same block.
+    const body = heading ? b.split("\n").slice(1).join("\n").trim() : b;
+    if (body) {
+      cur.blocks.push(body);
+      cur.size += body.length;
+    }
+  }
+  return out.filter((sct) => sct.title || sct.blocks.length);
+};
+const LONG_TICKET = 6_000;
+const LONG_SECTION = 1_500;
+
 export default function SessionContextPane({ agentKey, sessionId, cwd, wide }: { agentKey?: string | null; sessionId: string; cwd?: string | null; wide?: boolean }) {
   const [ctx, setCtx] = useState<Ctx | null>(null);
   const [tab, setTab] = useState<Tab | null>(null);
@@ -280,11 +303,28 @@ export default function SessionContextPane({ agentKey, sessionId, cwd, wide }: {
           {ticketErr && <div className="chat-error">{ticketErr}</div>}
           {!ticket && !ticketErr && <p className="ba-muted">Reading the ticket…</p>}
           {ticket &&
-            blocksOf(ticket.markdown).map((b, i) => (
-              <div key={i} className={`scx-block ${changed.has(b) ? "changed" : ""}`}>
-                <Markdown text={b} />
-              </div>
-            ))}
+            (() => {
+              const blocks = blocksOf(ticket.markdown);
+              const long = ticket.markdown.length > LONG_TICKET;
+              return sectionsOf(blocks).map((sct, i) => {
+                const body = sct.blocks.map((b, j) => (
+                  <div key={j} className={`scx-block ${changed.has(b) ? "changed" : ""}`}>
+                    <Markdown text={b} />
+                  </div>
+                ));
+                if (!sct.title) return <div key={i}>{body}</div>;
+                const hasChange = sct.blocks.some((b) => changed.has(b));
+                return (
+                  <details key={`${i}:${sct.title}`} className={`scx-section ${hasChange ? "changed" : ""}`} open={!long || sct.size <= LONG_SECTION || hasChange}>
+                    <summary>
+                      <span>{sct.title}</span>
+                      <small>{sct.blocks.length ? `${Math.max(1, Math.round(sct.size / 1200))} min read` : "empty"}</small>
+                    </summary>
+                    {body}
+                  </details>
+                );
+              });
+            })()}
           {changed.size > 0 && <p className="ba-muted scx-foot">Marked: changed since this pane opened.</p>}
         </div>
       )}
