@@ -17,6 +17,7 @@ import {
 import { baApi } from "../api.ts";
 import { Markdown } from "./Markdown.tsx";
 import { toast } from "./Toasts.tsx";
+import { canEmbedCloud, openCloud } from "../cloudPanel.ts";
 import { RunWhere } from "./RunWhere.tsx";
 import { StatusPill } from "./StatusPill.tsx";
 import { Agenda } from "./Agenda.tsx";
@@ -82,12 +83,12 @@ export function useAction(onOpen: Open) {
       .action({ kind, ...opts })
       .then((r) => {
         setError(null);
-        // A cloud session lives on claude.ai/code: open it there; a session on this Mac opens in the drawer.
+        // A cloud session lives on claude.ai/code: the app docks it on the right, a browser opens a tab; a session on this Mac opens in the drawer.
         if (r.url) {
           const url = r.url;
-          // The app opens it in the browser; a browser may block a window opened after a wait, so a toast offers it too.
-          window.open(url, "_blank", "noopener");
-          toast({ title: "Cloud session started", description: "It runs on claude.ai/code, also with this Mac closed.", tone: "success", duration: 12000, action: { label: "Open", run: () => void window.open(url, "_blank", "noopener") } });
+          // A browser may block a window opened after a wait, so a toast offers it too.
+          openCloud(url);
+          toast({ title: "Cloud session started", description: canEmbedCloud ? "Open on the right. It keeps running on claude.ai/code, also with this Mac closed." : "It runs on claude.ai/code, also with this Mac closed.", tone: "success", duration: 12000, action: { label: "Open", run: () => openCloud(url) } });
         } else onOpen(r.key);
         return true;
       })
@@ -394,7 +395,7 @@ function IrWorkspace({
           {sessions.map((s) => (
             s.key.startsWith("https://") ? (
               <span key={s.id} className="ba-line">
-                <a href={s.key} target="_blank" rel="noreferrer">
+                <a href={s.key} target="_blank" rel="noreferrer" onClick={(e) => { e.preventDefault(); openCloud(s.key); }}>
                   {s.title}
                 </a>
                 <span className="ba-muted">{["on claude.ai/code", ago(s.startedAt)].join(" · ")}</span>

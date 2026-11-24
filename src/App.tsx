@@ -125,6 +125,7 @@ import { TileLayer } from "./components/TileLayer.tsx";
 import { invalidateStatusCache } from "./components/useGitRepo.ts";
 import { SettingsView } from "./components/SettingsView.tsx";
 import { PageScrollJump } from "./components/scroll.tsx";
+import { CloudPanel } from "./components/CloudPanel.tsx";
 import { UsageView } from "./components/UsageView.tsx";
 import { WorktreesView } from "./components/WorktreesView.tsx";
 import {
@@ -1753,6 +1754,7 @@ export default function App() {
       {/* Suppressed while an overlay owns the screen: its own control is there. */}
       {!openId && !showNew && !showFolders && !showPalette && <PageScrollJump />}
 
+      <CloudPanel />
       <Toaster />
       {showInbox && (
         <NotificationCenter

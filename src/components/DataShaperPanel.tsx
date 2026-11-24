@@ -3,6 +3,7 @@ import type { DsChange, DsLeaf, DsOutcome, DsReport, DsTest } from "../../shared
 import { baApi } from "../api.ts";
 import { Markdown } from "./Markdown.tsx";
 import { toast } from "./Toasts.tsx";
+import { openCloud } from "../cloudPanel.ts";
 import { CopyIcon, DiffIcon } from "./Icons.tsx";
 
 /**
@@ -326,7 +327,7 @@ export default function DataShaperPanel({ sessionId, agentKey, live, compact }: 
       })
       .then((r) => {
         setIrDraft(null);
-        if (r.url) window.open(r.url, "_blank", "noopener");
+        if (r.url) openCloud(r.url);
         toast({ title: "Adding it to the integration request", description: "A session shows the section before it writes.", tone: "success", duration: 8000, action: r.url ? undefined : { label: "Open", run: () => void (window.location.hash = `#/session/${encodeURIComponent(r.key)}`) } });
       })
       .catch((e) => toast({ title: "Could not start it", description: String(e?.message ?? e), tone: "error" }))
