@@ -5,6 +5,18 @@
 This branch adds solution-architect, Professional Services and IDM workflows for Qargo
 on top of it. Rein's README, branding, app name and behaviour are unchanged.
 
+## Install
+
+On a Mac (Apple silicon), paste into Terminal; run it again to update:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MathijsRochus/claude-dashboard/qargo-ba-edition/get.sh | bash
+```
+
+It needs nothing installed first. GitHub builds the app on every push to this branch
+(`.github/workflows/ba-app.yml`) and publishes it on the rolling `ba-app` release, which
+`get.sh` downloads. Details in the README's Quick start.
+
 ## Off until you switch it on
 
 A fresh install is Rein's original dashboard, page for page. The only visible
@@ -57,7 +69,8 @@ New code is in new files, so Rein's updates merge with few conflicts:
 `src/baFlags.ts` and `src/components/` (`Agenda`, `BaEditionSettings`, `BaFilesBar`, `BaIcons`,
 `CustomerOverview`, `CustomerPanels`, `DeliveryView`, `DesktopWidgets`, `FeedbackMode`,
 `InboxView`, `MailComposer`, `MyDealsPanel`, `PublishedArtifacts`, `QaiPanel`,
-`QargoDiagramTools`, `RunWhere`, `StatusPill`).
+`QargoDiagramTools`, `RunWhere`, `StatusPill`), plus `get.sh` and `.github/workflows/ba-app.yml` for
+the one-line install.
 
 Rein's files only gain hooks guarded by the switches: `server/index.ts` (route, boot),
 `server/calendarSources.ts` (connector calendar), `src/App.tsx`, `src/pages.ts`,

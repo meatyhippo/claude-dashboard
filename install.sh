@@ -233,7 +233,8 @@ ok "packages installed"
 if [ "$MODE" = app ]; then
   if [ ! -d node_modules/electron/dist ]; then
     step "Electron"
-    bun node_modules/electron/install.js
+    # Electron's download script runs under Node; Bun 1.4 fails it.
+    if have node; then node node_modules/electron/install.js; else bun node_modules/electron/install.js; fi
     ok "downloaded"
   fi
   ./scripts/build-app.sh --install
