@@ -94,8 +94,19 @@ uploaded_size() {
   gh release view "$TAG" --repo "$REPO" --json assets \
     --jq ".assets[] | select(.name == \"$1\" and .state == \"uploaded\") | .size" 2>/dev/null
 }
+# Fails when GitHub does not answer, rather than reporting "no build".
 current_build() {
-  gh release download "$TAG" --repo "$REPO" -p build.txt -O - 2>/dev/null | head -1 || true
+  gh release download "$TAG" --repo "$REPO" -p build.txt -O - 2>/dev/null | head -1
+}
+# Sets PREVIOUS to the build installs get now, or to nothing when there is no
+# build.txt yet. Fails when that cannot be told.
+read_previous() {
+  local names
+  names="$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' 2>/dev/null)" || return 1
+  PREVIOUS=""
+  printf '%s\n' "$names" | grep -qx build.txt || return 0
+  PREVIOUS="$(current_build)" || return 1
+  [ -n "$PREVIOUS" ]
 }
 move_tag() {
   gh api -X PATCH "repos/$REPO/git/refs/tags/$TAG" -f sha="$SHA" -F force=true >/dev/null 2>&1 ||
@@ -110,10 +121,14 @@ upload_zip() {
   gh release upload "$TAG" --repo "$REPO" "$ZIP" --clobber >/dev/null 2>&1 || true
   [ "$(uploaded_size "$NAME")" = "$SIZE" ]
 }
-switch_build() {
-  gh release upload "$TAG" --repo "$REPO" "$OUT/build.txt" --clobber >/dev/null 2>&1 || true
-  [ "$(current_build)" = "$BUILD" ]
+# --clobber deletes build.txt before it uploads the new one, so a failed upload
+# leaves none; get.sh waits out that gap, and restore_build closes it on failure.
+put_build() {
+  gh release upload "$TAG" --repo "$REPO" "$1/build.txt" --clobber >/dev/null 2>&1 || true
+  [ "$(current_build || true)" = "$2" ]
 }
+switch_build() { put_build "$OUT" "$BUILD"; }
+restore_build() { put_build "$OUT/previous" "$PREVIOUS"; }
 
 # The tag follows the commit the build came from; the commit has to be on GitHub.
 if ! retry gh api "repos/$REPO/commits/$SHA" --silent; then
@@ -127,7 +142,12 @@ curl -fsSL https://raw.githubusercontent.com/$REPO/qargo-ba-edition/get.sh | bas
 \`\`\`"
 retry move_tag || { bad "could not move the $TAG tag"; exit 1; }
 retry have_release || { bad "could not create the $TAG release"; exit 1; }
-PREVIOUS="$(current_build)"
+PREVIOUS=""
+PREVIOUS_KNOWN=1
+if ! retry read_previous; then
+  PREVIOUS_KNOWN=0
+  warn "could not read the current build.txt; old zips are kept this time"
+fi
 
 # 1. The app, under its own name, so nothing that is being downloaded changes.
 SIZE="$(wc -c <"$ZIP" | tr -d ' ')"
@@ -135,12 +155,28 @@ retry upload_zip || { bad "uploading $NAME failed; installs still get ${PREVIOUS
 ok "uploaded $NAME"
 
 # 2. Switch installs over. For the second this takes, get.sh retries.
-retry switch_build || { bad "build.txt did not update; installs still get ${PREVIOUS:-nothing}"; exit 1; }
+if ! retry switch_build; then
+  if [ -n "$PREVIOUS" ]; then
+    mkdir -p "$OUT/previous"
+    echo "$PREVIOUS" >"$OUT/previous/build.txt"
+    if retry restore_build; then
+      bad "build.txt did not update; installs still get $PREVIOUS"
+    else
+      bad "build.txt did not update, and putting back the one naming $PREVIOUS failed too"
+      hint "installs fail until build.txt is back: run this again"
+    fi
+  else
+    bad "build.txt did not update; run this again"
+  fi
+  exit 1
+fi
 ok "build.txt names $BUILD"
 retry gh release edit "$TAG" --repo "$REPO" --notes "$NOTES" --latest=false >/dev/null ||
   warn "the release notes still describe the build before"
 
-# 3. Keep this zip and the one before it, for an install that read build.txt just before.
+# 3. Keep this zip and the one before it, for an install that read build.txt just
+# before. Not knowing which one that was, keep them all.
+[ "$PREVIOUS_KNOWN" = 1 ] || { ok "https://github.com/$REPO/releases/tag/$TAG"; exit 0; }
 gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' |
   { grep -E "^$PREFIX.*\.zip$" || true; } | while read -r old; do
     [ "$old" = "$NAME" ] || [ "$old" = "$PREFIX-$PREVIOUS.zip" ] && continue

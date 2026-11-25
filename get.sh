@@ -65,6 +65,7 @@ USAGE
 MODE=""
 YES=0
 TMP=""
+DEST=""
 
 # The script itself arrives on stdin through the pipe, so questions are asked on
 # the terminal directly. Without one (CI, a script), nothing is asked.
@@ -88,14 +89,67 @@ running_health() {
 }
 
 agent_loaded() { launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; }
+# The pid of the LaunchAgent's dashboard, when it is loaded and running.
+agent_pid() { launchctl print "$DOMAIN/$LABEL" 2>/dev/null | awk '$1 == "pid" && $2 == "=" { print $3; exit }'; }
 pid_alive() { kill -0 "$1" 2>/dev/null; }
+
+# A dashboard that is running, even one too busy to answer (it reads every past
+# session after login, which can take minutes). Sets running_pid, running_build
+# (empty when it did not say) and running_busy.
+find_running() {
+  running_pid="" running_build="" running_busy=0
+  local h
+  h="$(running_health || true)"
+  if [ -n "$h" ]; then
+    running_pid="$(json_value "$h" pid)"
+    running_build="$(json_value "$h" build)"
+    [ -n "$running_pid" ] && return 0
+  fi
+  running_pid="$(agent_pid || true)"
+  [ -n "$running_pid" ] || running_pid="$(pgrep -f "$DEST/Contents/Resources/bun" 2>/dev/null | head -1 || true)"
+  [ -n "$running_pid" ] && running_busy=1
+  return 0
+}
+
+app_open() { pgrep -f "$DEST/Contents/MacOS/" >/dev/null 2>&1; }
+
+# The app restarts a dashboard that stops under it, so it is quit first.
+quit_app() {
+  app_open || return 0
+  printf "  quitting the app%s\n" "${1:-}"
+  osascript -e "quit app \"$APP_NAME\"" >/dev/null 2>&1 || true
+  local i=0
+  while app_open && [ $i -lt 20 ]; do sleep 0.5; i=$((i + 1)); done
+  ! app_open || die "the app is still open; nothing was changed" "quit it (⌘Q), then run this again"
+}
+
+# bootout returns before launchd has let go of the job, and a bootstrap in that
+# moment fails ("Bootstrap failed: 5: Input/output error"), so both wait.
+unload_agent() {
+  agent_loaded || return 0
+  launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
+  local i=0
+  while agent_loaded && [ $i -lt 40 ]; do sleep 0.25; i=$((i + 1)); done
+  ! agent_loaded
+}
+start_agent() {
+  unload_agent || return 1
+  local i=0
+  while [ $i -lt 5 ]; do
+    launchctl bootstrap "$DOMAIN" "$AGENT" 2>/dev/null && return 0
+    sleep 1
+    i=$((i + 1))
+  done
+  launchctl bootstrap "$DOMAIN" "$AGENT" # once more, showing why
+}
 
 # Stops the dashboard with this pid and waits until it has really gone. Its
 # sessions end; they stay in History and can be resumed. Fails if it won't stop.
 stop_daemon() {
   local pid="$1" i=0
+  quit_app ""
   # Under launchd, unload it first, or launchd could start it again.
-  if agent_loaded; then launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true; fi
+  unload_agent || true
   kill -TERM "$pid" 2>/dev/null || true
   while pid_alive "$pid" && [ $i -lt 40 ]; do sleep 0.5; i=$((i + 1)); done
   if pid_alive "$pid"; then
@@ -116,19 +170,32 @@ find_claude() {
   done
 }
 
-# The current build's name. A publish replaces build.txt in about a second, so a
-# miss is tried again before giving up.
+# The current build's name. A publish replaces build.txt, and it is missing
+# while that happens: a second normally, longer when GitHub is slow. So a 404 is
+# waited out for a minute and a half, while no connection at all fails sooner.
+# Returns 2 when build.txt was missing throughout.
 fetch_build() {
-  local b="" i=0
-  while [ $i -lt 4 ]; do
-    b="$(curl -fsSL --max-time 20 "$DOWNLOAD/build.txt" 2>/dev/null | head -1 | tr -d '\r' || true)"
-    case "$b" in
-      "" | *[!A-Za-z0-9._-]*) ;;
-      *) echo "$b"; return 0 ;;
-    esac
-    sleep 2
-    i=$((i + 1))
+  local b code tries=0 missing=0 said=0
+  while [ $tries -lt 4 ] && [ $missing -lt 30 ]; do
+    code="$(curl -sSL --max-time 20 -o "$TMP/build.txt" -w '%{http_code}' "$DOWNLOAD/build.txt" 2>/dev/null || true)"
+    if [ "$code" = 200 ]; then
+      b="$(head -1 "$TMP/build.txt" | tr -d '\r')"
+      case "$b" in
+        "" | *[!A-Za-z0-9._-]*) tries=$((tries + 1)) ;;
+        *) echo "$b"; return 0 ;;
+      esac
+    elif [ "$code" = 404 ]; then
+      missing=$((missing + 1))
+      if [ $said = 0 ] && [ $missing = 2 ]; then
+        printf "  a new build may be being published; waiting for it\n" >&2
+        said=1
+      fi
+    else
+      tries=$((tries + 1))
+    fi
+    sleep 3
   done
+  [ $missing -ge 30 ] && return 2
   return 1
 }
 
@@ -246,43 +313,70 @@ main() {
     fi
   fi
 
-  # ── what is there now ───────────────────────────────────────────────────────
+  # ── download ────────────────────────────────────────────────────────────────
+  # Everything is downloaded and checked before anything running is touched, so
+  # a failed download leaves the dashboard as it was.
   step "Download"
-  local restart_shown=0
-  local build
-  build="$(fetch_build)" || die "could not reach the download at $DOWNLOAD" "check your internet connection, then run this again"
+  local build rc=0
+  build="$(fetch_build)" || rc=$?
+  [ "$rc" = 2 ] && die "there is no build to download at $DOWNLOAD" "ask whoever looks after the dashboard; the release may be missing or private"
+  [ "$rc" = 0 ] || die "could not reach the download at $DOWNLOAD" "check your internet connection, then run this again"
   if [ ! -w "$APPS_DIR" ]; then
     # Not an administrator: an Applications folder of their own works the same.
     APPS_DIR="$HOME/Applications"
     mkdir -p "$APPS_DIR"
   fi
-  local dest="$APPS_DIR/$APP_NAME.app"
+  DEST="$APPS_DIR/$APP_NAME.app"
   local installed="" update=1
-  [ -f "$dest/Contents/Resources/daemon/package.json" ] &&
-    installed="$(json_value "$dest/Contents/Resources/daemon/package.json" build)"
+  [ -f "$DEST/Contents/Resources/daemon/package.json" ] &&
+    installed="$(json_value "$DEST/Contents/Resources/daemon/package.json" build)"
   if [ -n "$installed" ] && [ "$installed" = "$build" ]; then
     update=0
     ok "build $build is already installed"
   fi
 
-  # The dashboard outlives the app, so one from an older build can still be serving.
-  local h running_pid="" running_build=""
-  h="$(running_health || true)"
-  if [ -n "$h" ]; then
-    running_pid="$(json_value "$h" pid)"
-    running_build="$(json_value "$h" build)"
+  local new_app="$TMP/x/$APP_NAME.app"
+  if [ "$update" = 1 ]; then
+    # The zip and the unpacked app need about 1 GB together while it installs.
+    local free_kb
+    free_kb="$(df -Pk "$TMP" | awk 'NR==2 {print $4}')"
+    if [ -n "$free_kb" ] && [ "$free_kb" -lt 1300000 ]; then
+      die "not enough free disk space: $((free_kb / 1024)) MB free, about 1.3 GB needed" "free up some space, then run this again"
+    fi
+    printf "  downloading build %s\n" "$build"
+    if ! curl -fL --progress-bar "$DOWNLOAD/Claude-Dashboard-arm64-$build.zip" -o "$TMP/app.zip"; then
+      # Two publishes during this download can remove its file; the newest is there.
+      local newer
+      newer="$(fetch_build || true)"
+      [ -n "$newer" ] && [ "$newer" != "$build" ] || die "the download failed; nothing was changed" "run this again in a minute"
+      build="$newer"
+      printf "  a newer build came out meanwhile; downloading build %s\n" "$build"
+      curl -fL --progress-bar "$DOWNLOAD/Claude-Dashboard-arm64-$build.zip" -o "$TMP/app.zip" ||
+        die "the download failed; nothing was changed" "run this again in a minute"
+    fi
+    ditto -x -k "$TMP/app.zip" "$TMP/x" || die "could not unpack the download; nothing was changed" "check you have about 1.3 GB free, then run this again"
+    rm -f "$TMP/app.zip"
+    [ -d "$new_app" ] || die "the download did not contain the app; nothing was changed"
+    codesign --verify --strict "$new_app" 2>/dev/null || die "the downloaded app failed its signature check; nothing was changed"
+    ok "downloaded and checked build $build"
   fi
 
   # ── a dashboard from another build ──────────────────────────────────────────
-  # One running from the files an update replaces must stop first: left running,
-  # it serves the new screens with its old code, and whatever it starts from the
-  # replaced files fails. Any other one only needs a restart to switch over.
+  # The dashboard outlives the app, so one from an older build can still be
+  # running. One running from the files an update replaces must stop first: left
+  # running, it serves the new screens with its old code, and whatever it starts
+  # from the replaced files fails. Any other one only needs a restart to switch.
+  find_running
   local stop_pid=""
-  if [ -n "$running_pid" ] && [ "$running_build" != "$build" ] && [ -z "${CLAUDE_DASHBOARD_NO_START:-}" ]; then
+  if [ -n "$running_pid" ] && [ "$running_build" != "$build" ] && [ -z "${CLAUDE_DASHBOARD_NO_START:-}" ] &&
+    { [ "$update" = 1 ] || [ "$running_busy" = 0 ]; }; then
     step "Restart"
-    restart_shown=1
-    warn "the dashboard running now is ${running_build:+build }${running_build:-a build without a name}"
-    if [ "$update" = 1 ] && ps -o command= -p "$running_pid" 2>/dev/null | grep -qF "$dest/Contents/"; then
+    if [ "$running_busy" = 1 ]; then
+      warn "a dashboard is running but not answering yet (process $running_pid; it may still be starting)"
+    else
+      warn "the dashboard running now is ${running_build:+build }${running_build:-a build without a name}"
+    fi
+    if [ "$update" = 1 ] && ps -o command= -p "$running_pid" 2>/dev/null | grep -qF "$DEST/Contents/"; then
       if [ "$YES" = 1 ] || ! has_tty; then
         printf "  it runs from the files this update replaces, so it stops first\n"
         stop_pid="$running_pid"
@@ -298,50 +392,37 @@ main() {
     fi
   fi
 
-  # The app is quit before its dashboard is stopped, so it cannot start that again.
-  if { [ "$update" = 1 ] || [ -n "$stop_pid" ]; } && pgrep -f "$dest/Contents/MacOS/" >/dev/null 2>&1; then
-    if [ -n "$stop_pid" ]; then printf "  quitting the app\n"; else printf "  quitting the app (its sessions keep running)\n"; fi
-    osascript -e "quit app \"$APP_NAME\"" >/dev/null 2>&1 || true
-    local i=0
-    while pgrep -f "$dest/Contents/MacOS/" >/dev/null 2>&1 && [ $i -lt 20 ]; do sleep 0.5; i=$((i + 1)); done
-    pgrep -f "$dest/Contents/MacOS/" >/dev/null 2>&1 && die "the app is still open; nothing was changed" "quit it (⌘Q), then run this again"
-  fi
   if [ -n "$stop_pid" ]; then
     stop_daemon "$stop_pid" ||
-      die "the running dashboard (process $stop_pid) would not stop; nothing was changed" "restart your Mac, then run this again"
+      die "the running dashboard (process $stop_pid) would not stop; nothing was installed" "restart your Mac, then run this again"
     ok "stopped"
+  elif [ "$update" = 1 ]; then
+    quit_app " (its sessions keep running)"
   fi
 
-  # ── download and install ────────────────────────────────────────────────────
+  # ── install ─────────────────────────────────────────────────────────────────
   if [ "$update" = 1 ]; then
-    # The zip and the unpacked app need about 1 GB together while it installs.
-    local free_kb
-    free_kb="$(df -Pk "$TMP" | awk 'NR==2 {print $4}')"
-    if [ -n "$free_kb" ] && [ "$free_kb" -lt 1300000 ]; then
-      die "not enough free disk space: $((free_kb / 1024)) MB free, about 1.3 GB needed" "free up some space, then run this again"
-    fi
-    [ "$restart_shown" = 1 ] && step "Download"
-    printf "  downloading build %s\n" "$build"
-    if ! curl -fL --progress-bar "$DOWNLOAD/Claude-Dashboard-arm64-$build.zip" -o "$TMP/app.zip"; then
-      # Two publishes during this download can remove its file; the newest is there.
-      local newer
-      newer="$(fetch_build || true)"
-      [ -n "$newer" ] && [ "$newer" != "$build" ] || die "the download failed" "run this again in a minute"
-      build="$newer"
-      printf "  a newer build came out meanwhile; downloading build %s\n" "$build"
-      curl -fL --progress-bar "$DOWNLOAD/Claude-Dashboard-arm64-$build.zip" -o "$TMP/app.zip" ||
-        die "the download failed" "run this again in a minute"
-    fi
-    ditto -x -k "$TMP/app.zip" "$TMP/x" || die "could not unpack the download" "check you have about 1.3 GB free, then run this again"
-    rm -f "$TMP/app.zip"
-    [ -d "$TMP/x/$APP_NAME.app" ] || die "the download did not contain the app"
-    codesign --verify --strict "$TMP/x/$APP_NAME.app" 2>/dev/null || die "the downloaded app failed its signature check; nothing was changed"
-
     step "Install"
-    rm -rf "$dest"
-    # A move on the same disk takes no time and no extra space; a copy is the fallback.
-    mv "$TMP/x/$APP_NAME.app" "$dest" 2>/dev/null || ditto "$TMP/x/$APP_NAME.app" "$dest"
-    xattr -dr com.apple.quarantine "$dest" 2>/dev/null || true
+    # Beside the old app first, then two renames, so a failure at any point
+    # leaves one complete app in place. A move on the same disk takes no time
+    # and no extra space; a copy is the fallback.
+    local staged="$DEST.new" old="$DEST.old"
+    rm -rf "$staged" "$old"
+    mv "$new_app" "$staged" 2>/dev/null || ditto "$new_app" "$staged" 2>/dev/null || {
+      rm -rf "$staged"
+      die "could not copy the app into $APPS_DIR; the old one is still there" "check you have about 700 MB free there, then run this again"
+    }
+    if [ -e "$DEST" ] && ! mv "$DEST" "$old" 2>/dev/null; then
+      rm -rf "$staged"
+      die "could not replace $DEST; the old one is still there" "quit anything using it, then run this again"
+    fi
+    if ! mv "$staged" "$DEST" 2>/dev/null; then
+      [ -e "$old" ] && mv "$old" "$DEST" 2>/dev/null
+      rm -rf "$staged"
+      die "could not install the app; the old one is still there" "run this again"
+    fi
+    rm -rf "$old" 2>/dev/null || true
+    xattr -dr com.apple.quarantine "$DEST" 2>/dev/null || true
     if [ -n "$installed" ]; then ok "updated $installed → $build"; else ok "installed in $APPS_DIR"; fi
   fi
 
@@ -356,31 +437,28 @@ main() {
   step "Start"
   if [ "$MODE" = browser ]; then
     mkdir -p "$HOME/Library/LaunchAgents" "$DATA_DIR"
-    write_agent "$TMP/agent.plist" "$dest"
+    write_agent "$TMP/agent.plist" "$DEST"
     local same=0 start=0
     cmp -s "$TMP/agent.plist" "$AGENT" && same=1
-    h="$(running_health || true)"
-    if [ -z "$h" ]; then
-      # Nothing is serving, so reloading the agent ends no sessions.
+    find_running
+    if [ -z "$running_pid" ]; then
+      # Nothing is running, so reloading the agent ends no sessions.
       cp "$TMP/agent.plist" "$AGENT"
-      agent_loaded && launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
       start=1
-    elif [ "$same" = 1 ] && agent_loaded; then
+    elif [ "$same" = 1 ] && [ "$(agent_pid || true)" = "$running_pid" ]; then
       ok "already running; it starts by itself when you log in"
     else
-      # One is serving already: the app's, or this one under older settings.
-      local pid
-      pid="$(json_value "$h" pid)"
+      # One is running already: the app's, or this one under older settings.
       cp "$TMP/agent.plist" "$AGENT"
-      if [ -n "$pid" ] && ask_yes "Restart the dashboard so it runs in the background from now on? Running sessions stop; you can resume them from History."; then
-        stop_daemon "$pid" || die "the running dashboard (process $pid) would not stop" "restart your Mac; it then starts by itself"
+      if ask_yes "Restart the dashboard so it runs in the background from now on? Running sessions stop; you can resume them from History."; then
+        stop_daemon "$running_pid" || die "the running dashboard (process $running_pid) would not stop" "restart your Mac; it then starts by itself"
         start=1
       else
         ok "left running; from your next login it starts by itself"
       fi
     fi
     if [ "$start" = 1 ]; then
-      launchctl bootstrap "$DOMAIN" "$AGENT" || die "could not start the dashboard" "see $DATA_DIR/daemon.log"
+      start_agent || die "could not start the dashboard" "see $DATA_DIR/daemon.log"
       printf "  starting (the first start reads all your past sessions, which can take a minute)\n"
       local i=0
       while ! running_health >/dev/null && [ $i -lt 360 ]; do sleep 0.5; i=$((i + 1)); done
@@ -392,16 +470,16 @@ main() {
     if [ -f "$AGENT" ] || agent_loaded; then
       # Switching back from the browser: the app starts the dashboard itself.
       rm -f "$AGENT"
-      if agent_loaded && running_health >/dev/null; then
-        # Unloading it would end its sessions. Without its file it is not
-        # started again at the next login, and the app uses it until then.
+      if [ -n "$(agent_pid || true)" ]; then
+        # Unloading it would end its sessions, busy or not. Without its file it
+        # is not started again at the next login, and the app uses it until then.
         ok "no longer starts at login; the one running now keeps going until you log out"
       else
-        launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
+        unload_agent || true
         ok "no longer starts at login; the app starts it"
       fi
     fi
-    open "$dest"
+    open "$DEST"
     ok "opened $APP_NAME"
   fi
 

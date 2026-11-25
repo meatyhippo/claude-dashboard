@@ -30,7 +30,9 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          # The version the build was tested with; 1.4 already broke Electron's
+          # download script once (see scripts/publish-ba-app.sh).
+          bun-version: 1.4.5
 
       - name: Build the app
         run: ./scripts/publish-ba-app.sh --build-only
@@ -44,6 +46,9 @@ jobs:
 
   publish:
     needs: build
+    # A manual run from another branch builds it, as a check, but only
+    # qargo-ba-edition reaches the BAs.
+    if: github.ref == 'refs/heads/qargo-ba-edition'
     runs-on: ubuntu-latest
     # Never cancelled half-way, since it replaces files people are downloading.
     # A newer publish waits until this one is done.
