@@ -7,7 +7,7 @@ on top of it. Rein's README, branding, app name and behaviour are unchanged.
 
 ## Install
 
-On a Mac (Apple silicon), paste into Terminal; run it again to update:
+On a Mac (Apple silicon, macOS 13 or later), paste into Terminal; run it again to update:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/MathijsRochus/claude-dashboard/qargo-ba-edition/get.sh | bash
@@ -15,7 +15,8 @@ curl -fsSL https://raw.githubusercontent.com/MathijsRochus/claude-dashboard/qarg
 
 It needs nothing installed first. GitHub builds the app on every push to this branch
 (`.github/workflows/ba-app.yml`) and publishes it on the rolling `ba-app` release, which
-`get.sh` downloads. Details in the README's Quick start.
+`get.sh` downloads. When GitHub has no macOS runner free, `./scripts/publish-ba-app.sh` does
+the same from any Apple silicon Mac. Details in the README's Quick start.
 
 ## Off until you switch it on
 

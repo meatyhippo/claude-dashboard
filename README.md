@@ -16,7 +16,7 @@ what it adds is in [BA-EDITION.md](BA-EDITION.md).
 
 ### Install on a Mac, nothing else needed
 
-Paste this into Terminal (Apple silicon Macs):
+Paste this into Terminal (Apple silicon Macs, macOS 13 or later):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/MathijsRochus/claude-dashboard/qargo-ba-edition/get.sh | bash
@@ -33,7 +33,9 @@ into `/Applications`, and asks how you want to use it:
 
 Both are the same dashboard with the same data in `~/.claude-dashboard`: the app's window
 shows that page, and you can switch by running the line again. **To update, run the same
-line again.** Skip the question with `… | bash -s -- --app` or `--browser`.
+line again.** It asks before it stops a running dashboard, since that ends its sessions
+(they stay in History, to resume). Skip the questions with `… | bash -s -- --app` or
+`--browser`, and `--yes`.
 
 To remove it: delete the app, and in browser mode also
 `launchctl bootout gui/$(id -u)/com.qargo.claude-dashboard; rm ~/Library/LaunchAgents/com.qargo.claude-dashboard.plist`.

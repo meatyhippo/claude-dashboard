@@ -1,11 +1,11 @@
 # Builds the BA edition's Mac app and publishes it, so a BA installs it with one
 # line (get.sh) and never needs git, Homebrew, Node or Bun on their own Mac.
 #
-# Every push to qargo-ba-edition replaces the app on one rolling release, tag
-# `ba-app`: get.sh always downloads
-#   https://github.com/<owner>/<repo>/releases/download/ba-app/Claude-Dashboard-arm64.zip
-# and build.txt beside it names the build, so a re-run of get.sh can tell an
-# update from what is already installed.
+# Every push to qargo-ba-edition publishes the app on one rolling release, tag
+# `ba-app`, as Claude-Dashboard-arm64-<build>.zip. build.txt beside it names the
+# current build: get.sh reads it, then downloads that zip, and a re-run can tell
+# an update from what is already installed. scripts/publish-ba-app.sh does both
+# halves, and explains the order the files are replaced in.
 name: BA app
 
 on:
@@ -16,16 +16,15 @@ on:
 permissions:
   contents: write
 
-# A newer push makes the build in progress pointless.
-concurrency:
-  group: ba-app
-  cancel-in-progress: true
-
 jobs:
   build:
     # GitHub's current macOS image, which runs on Apple silicon like the app. A
     # pinned version label stops getting machines once GitHub retires it.
     runs-on: macos-latest
+    # A newer push makes a build in progress pointless.
+    concurrency:
+      group: ba-app-build
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
 
@@ -33,43 +32,33 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Packages
-        run: |
-          bun install --frozen-lockfile
-          # Electron's download script runs under Node (on the runner); Bun 1.4 fails it.
-          [ -d node_modules/electron/dist ] || node node_modules/electron/install.js
-
       - name: Build the app
-        run: ./scripts/build-app.sh --zip build/Claude-Dashboard-arm64.zip
+        run: ./scripts/publish-ba-app.sh --build-only
 
-      - name: Name the build
-        id: build
-        run: |
-          BUILD="$(sed -nE 's/.*"build"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' build/app-daemon/package.json | head -1)"
-          echo "$BUILD" > build/build.txt
-          echo "build=$BUILD" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ba-app
+          path: build/ba-app/
+          retention-days: 3
+          compression-level: 0
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    # Never cancelled half-way, since it replaces files people are downloading.
+    # A newer publish waits until this one is done.
+    concurrency:
+      group: ba-app-publish
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ba-app
+          path: build/ba-app
 
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-          BUILD: ${{ steps.build.outputs.build }}
-        run: |
-          # The tag follows the commit it was built from.
-          git tag -f ba-app "$GITHUB_SHA"
-          git push -f origin refs/tags/ba-app
-          NOTES="Built from ${GITHUB_SHA::7} ($BUILD). Install or update on a Mac (Apple silicon) with:
-
-          \`\`\`
-          curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/qargo-ba-edition/get.sh | bash
-          \`\`\`"
-          if gh release view ba-app >/dev/null 2>&1; then
-            gh release edit ba-app --notes "$NOTES" --latest=false
-          else
-            gh release create ba-app --title "Claude Dashboard (BA edition)" --notes "$NOTES" --latest=false
-          fi
-          # Delete, then upload: --clobber on a large file can report "already exists"
-          # after succeeding. build.txt last, so get.sh never sees a build before its app.
-          for f in build/Claude-Dashboard-arm64.zip build/build.txt; do
-            gh release delete-asset ba-app "$(basename "$f")" -y >/dev/null 2>&1 || true
-            gh release upload ba-app "$f"
-          done
+        run: ./scripts/publish-ba-app.sh --no-build --repo "$GITHUB_REPOSITORY"
