@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, platform, userInfo } from "node:os";
 import { join, relative, sep } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
@@ -64,8 +64,21 @@ const LARGE_BYTES = 50 * 1024 * 1024;
  */
 export const MAX_BUNDLE_BYTES = 512 * 1024 * 1024;
 
-/** Saved tool output read as text: scanned for credentials on export, paths rewritten on import. */
-const TEXT_FILE = /\.(json|txt|md|html?)$/i;
+const utf8 = new TextDecoder("utf-8", { fatal: true });
+
+/**
+ * A file's text, or null for binary. Whatever reads as text, whatever its name
+ * (.yaml, .log, .env, none), is scanned for credentials on export and has its
+ * paths rewritten on import.
+ */
+function asText(bytes: Uint8Array): string | null {
+  if (bytes.includes(0)) return null;
+  try {
+    return utf8.decode(bytes);
+  } catch {
+    return null;
+  }
+}
 
 export type Manifest = {
   title: string | null;
@@ -151,10 +164,12 @@ function walk(dir: string): string[] {
     const p = join(dir, name);
     let st;
     try {
-      st = statSync(p);
+      st = lstatSync(p);
     } catch {
-      continue; // a broken link, or deleted while we looked
+      continue; // deleted while we looked
     }
+    // Links are skipped: one can point anywhere (~/.ssh) or back up the tree.
+    if (st.isSymbolicLink()) continue;
     if (st.isDirectory()) out.push(...walk(p));
     else if (st.isFile()) out.push(p);
   }
@@ -223,8 +238,9 @@ function build(sessionId: string): { bundle: Bundle; texts: string[] } | null {
       const text = stripJsonl(bytes.toString("utf8"));
       texts.push(text);
       bytes = Buffer.from(text, "utf8");
-    } else if (TEXT_FILE.test(rel)) {
-      texts.push(bytes.toString("utf8"));
+    } else {
+      const text = asText(bytes);
+      if (text !== null) texts.push(text);
     }
     files[rel] = bytes.toString("base64");
   }
@@ -264,7 +280,23 @@ function fileStem(title: string | null, sessionId: string): string {
   return `${words || "session"}-${sessionId.slice(0, 8)}`;
 }
 
-export type PreparedFile = { name: string; title: string | null; bytes: Uint8Array<ArrayBuffer> };
+export type PreparedFile = {
+  name: string;
+  title: string | null;
+  bytes: Uint8Array<ArrayBuffer>;
+  /** Credentials the preview found. Sending needs the user's acknowledgement when above zero. */
+  secrets: number;
+};
+
+/** Why a prepared file cannot be used; `expired` is the only one a fresh preview fixes. */
+export class PreparedFileError extends Error {
+  constructor(
+    message: string,
+    readonly reason: "expired" | "needs-ack",
+  ) {
+    super(message);
+  }
+}
 
 /**
  * Files made for a preview, by token. The credential check and its
@@ -279,13 +311,20 @@ export function previewExport(sessionId: string): ExportPreview | null {
   const b = build(sessionId);
   if (!b) return null;
   const bytes = new Uint8Array(gzipSync(JSON.stringify(b.bundle)));
-  const token = randomUUID();
+  const tooLarge = bytes.length > MAX_BUNDLE_BYTES;
+  const secrets = scanSecrets(b.texts);
+  const title = b.bundle.manifest.title;
   const now = Date.now();
   for (const [k, v] of prepared) if (now - v.at > PREPARED_TTL_MS) prepared.delete(k);
-  // Bundles can be large; keep only the newest few.
-  while (prepared.size >= PREPARED_MAX) prepared.delete(prepared.keys().next().value!);
-  const title = b.bundle.manifest.title;
-  prepared.set(token, { name: fileStem(title, sessionId) + EXT, title, bytes, at: now });
+  // A file too large to hand over is described but never kept.
+  let token = "";
+  if (!tooLarge) {
+    token = randomUUID();
+    // Bundles can be large; keep only the newest few.
+    while (prepared.size >= PREPARED_MAX) prepared.delete(prepared.keys().next().value!);
+    const count = secrets.reduce((n, s) => n + s.count, 0);
+    prepared.set(token, { name: fileStem(title, sessionId) + EXT, title, bytes, secrets: count, at: now });
+  }
   return {
     token,
     title,
@@ -294,16 +333,22 @@ export function previewExport(sessionId: string): ExportPreview | null {
     files: Object.keys(b.bundle.files).length,
     bytes: bytes.length,
     large: bytes.length > LARGE_BYTES,
-    tooLarge: bytes.length > MAX_BUNDLE_BYTES,
-    secrets: scanSecrets(b.texts),
+    tooLarge,
+    secrets,
   };
 }
 
-/** The file a preview made. Throws when it is gone, so nothing unchecked is ever sent. */
-export function preparedFile(token: string): PreparedFile {
+/**
+ * The file a preview made. Throws when it is gone, so nothing unchecked is ever
+ * sent, and when it holds credentials the user has not acknowledged: the page
+ * asks, but the daemon does not take the page's word for it.
+ */
+export function preparedFile(token: string, ack: boolean): PreparedFile {
   const f = prepared.get(token);
-  if (!f || Date.now() - f.at > PREPARED_TTL_MS) throw new Error("this preview has expired; close the window and open Send again");
-  if (f.bytes.length > MAX_BUNDLE_BYTES) throw new Error(`the session is too large to hand over (over ${MAX_BUNDLE_BYTES / 1024 / 1024} MB)`);
+  if (!f || Date.now() - f.at > PREPARED_TTL_MS)
+    throw new PreparedFileError("this preview has expired; close the window and open Send again", "expired");
+  if (f.secrets > 0 && !ack)
+    throw new PreparedFileError("this session holds what look like credentials; confirm you still want to send it", "needs-ack");
   return f;
 }
 
@@ -312,8 +357,8 @@ export function preparedFile(token: string): PreparedFile {
  * exists), then show it in Finder and bring Slack forward, so sending it is one
  * drag. The way to send when the Slack connector cannot upload files.
  */
-export function exportSession(token: string): { path: string } {
-  const f = preparedFile(token);
+export function exportSession(token: string, ack: boolean): { path: string } {
+  const f = preparedFile(token, ack);
   const downloads = join(homedir(), "Downloads");
   const dir = existsSync(downloads) ? downloads : join(DATA_DIR, "exports");
   mkdirSync(dir, { recursive: true });
@@ -340,22 +385,43 @@ function parseBundle(raw: Uint8Array): Bundle {
 }
 
 /**
+ * Where a path key may end: at a separator, a quote, a bracket, punctuation or
+ * whitespace. So /Users/jan is not the start of /Users/jan.doe or /Users/janet,
+ * and ~/.claude not of ~/.claude.json. A dot counts only as a full stop (followed
+ * by whitespace, a quote or the end). A space counts unless what follows reads as
+ * the rest of a folder name (` dashboard/…`), so ~/Documents/Claude is not the
+ * start of ~/Documents/Claude dashboard/; the price is that a path followed by a
+ * space and a relative path (`ls ~/x foo/bar`) is left as it was.
+ */
+const PATH_END = String.raw`(?=$|[/\\"'` + "`" + String.raw`)\]}>,;:|\t\r\n]| (?![^\s"'/\\]+/)|\.(?=$|[\s"'\\]))`;
+/** Where a name key (a session id, or the session folder named by it) may end: anything but more of the name, so `<id>.jsonl` matches. */
+const NAME_END = "(?![A-Za-z0-9_-])";
+
+export type RewritePair = [from: string, to: string, kind?: "path" | "name"];
+
+/**
  * Every pair in one pass, longest match first, so the session folder wins over the
- * profile it sits in and the profile over the home directory around both.
- *
- * A match must end where a path's name ends: /Users/jan is not the start of
- * /Users/janet, nor ~/proj of ~/proj-archive. A dot may follow (`<id>.jsonl`).
+ * profile it sits in and the profile over the home directory around both. A
+ * longer key that fails its boundary falls back to a shorter one that fits.
  *
  * One pass rather than one replace per pair, because the outputs overlap the
  * inputs: ~/.claude → ~/.claude-work run after the session folder has already
  * become ~/.claude-work/… matches again and yields ~/.claude-work-work/….
  */
-export function rewriter(pairs: [string, string][]): (s: string) => string {
-  const map = new Map(pairs.filter(([from, to]) => from && from !== to));
+export function rewriter(pairs: RewritePair[]): (s: string) => string {
+  const map = new Map<string, string>();
+  const kinds = new Map<string, "path" | "name">();
+  for (const [from, to, kind = "path"] of pairs) {
+    if (!from || from === to || map.has(from)) continue;
+    map.set(from, to);
+    kinds.set(from, kind);
+  }
   if (map.size === 0) return (s) => s;
   const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const keys = [...map.keys()].sort((a, b) => b.length - a.length).map(escape);
-  const re = new RegExp(`(?:${keys.join("|")})(?![A-Za-z0-9_-])`, "g");
+  const alts = [...map.keys()]
+    .sort((a, b) => b.length - a.length)
+    .map((k) => `${escape(k)}${kinds.get(k) === "name" ? NAME_END : PATH_END}`);
+  const re = new RegExp(alts.join("|"), "g");
   return (s) => s.replace(re, (hit) => map.get(hit) ?? hit);
 }
 
@@ -379,13 +445,13 @@ export function importSession(raw: Uint8Array, folder?: string): { sessionId: st
   // The old cwd is rewritten as text only when it is a folder of its own. A session
   // started in the home directory would otherwise move every ~/… path it mentions
   // into the import folder; the `cwd` fields are set directly below instead.
-  const ownCwd = m.cwd && m.cwd !== m.home ? ([[m.cwd, cwd]] as [string, string][]) : [];
+  const ownCwd: RewritePair[] = m.cwd && m.cwd !== m.home ? [[m.cwd, cwd]] : [];
   const rewrite = rewriter([
-    [m.sessionDir, sessionDir],
+    [m.sessionDir, sessionDir, "name"],
     ...ownCwd,
     [m.profile, CLAUDE_HOME],
     [m.home, homedir()],
-    [m.sessionId, newId],
+    [m.sessionId, newId, "name"],
   ]);
   const withCwd = (text: string) =>
     text
@@ -413,7 +479,10 @@ export function importSession(raw: Uint8Array, folder?: string): { sessionId: st
     mkdirSync(join(dest, ".."), { recursive: true });
     let bytes = Buffer.from(b64, "base64");
     if (/\.jsonl$/i.test(rel)) bytes = Buffer.from(withCwd(rewrite(bytes.toString("utf8"))), "utf8");
-    else if (TEXT_FILE.test(rel)) bytes = Buffer.from(rewrite(bytes.toString("utf8")), "utf8");
+    else {
+      const text = asText(bytes);
+      if (text !== null) bytes = Buffer.from(rewrite(text), "utf8");
+    }
     writeFileSync(dest, bytes);
   }
   return { sessionId: newId, cwd, title: m.title ? `${m.title} (from ${m.exportedBy})` : `From ${m.exportedBy}` };

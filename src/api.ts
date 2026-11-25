@@ -1327,22 +1327,25 @@ export type TransferPreview = {
   secrets: { label: string; count: number }[];
 };
 
+export type SlackStatus = { state: string; search: boolean; upload: boolean; missing: string[] };
+
 /** Handing a session to a colleague as one `.claudesession` file. */
 export const transferApi = {
   /** Makes the file and describes it; its token names that exact file for Save and Send. */
   preview: (sessionId: string) => get<TransferPreview>(`/api/transfer/preview?id=${encodeURIComponent(sessionId)}`),
   /** Writes the previewed file to ~/Downloads, shows it in Finder and brings Slack forward. */
-  export: (token: string) => post<{ path: string }>("/api/transfer/export", { token }),
-  /** Whether the user's Slack connector can find people and upload files. */
+  export: (token: string, ack: boolean) => post<{ path: string }>("/api/transfer/export", { token, ack }),
+  /** Whether the user's Slack connector is connected, and can find people and upload files. */
   slackStatus: (refresh = false) =>
-    get<{ search: boolean; upload: boolean; missing: string[] }>(`/api/transfer/slack/status${refresh ? "?refresh=1" : ""}`),
+    get<SlackStatus>(`/api/transfer/slack/status${refresh ? "?refresh=1" : ""}`),
   /** People matching a name, through the Slack connector on the user's claude.ai account. */
   slackPeople: (query: string) =>
     post<{ people: { id: string; name: string; email: string; title: string }[] }>("/api/transfer/slack/people", { query }),
   /** Uploads the previewed file and shares it in a DM with that person. Takes ~30 s. */
-  slackSend: (token: string, userId: string, comment: string) =>
+  slackSend: (token: string, ack: boolean, userId: string, comment: string) =>
     post<{ to: string; channel: string; link: string | null; name: string }>("/api/transfer/slack/send", {
       token,
+      ack,
       userId,
       comment,
     }),

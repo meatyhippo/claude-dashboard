@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { agentApi, transferApi, type TransferPreview } from "../api.ts";
+import { agentApi, transferApi, type SlackStatus, type TransferPreview } from "../api.ts";
 import { ImportIcon, SendIcon } from "./Icons.tsx";
 import { toast } from "./Toasts.tsx";
 
@@ -44,15 +44,20 @@ export function ExportModal({ sessionId, onClose }: { sessionId: string; onClose
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState<{ to: Person; link: string | null } | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
-  const [slack, setSlack] = useState<{ upload: boolean; missing: string[] } | null>(null);
+  const [slack, setSlack] = useState<SlackStatus | null>(null);
   const [slackError, setSlackError] = useState<string | null>(null);
 
-  useEffect(() => {
+  // The daemon keeps a good answer for an hour and re-checks anything else, so
+  // opening the window again picks up a connector set up in the meantime.
+  const checkSlack = (refresh: boolean) => {
+    setSlack(null);
+    setSlackError(null);
     transferApi
-      .slackStatus()
+      .slackStatus(refresh)
       .then(setSlack)
       .catch((e: Error) => setSlackError(e.message));
-  }, []);
+  };
+  useEffect(() => checkSlack(false), []);
 
   useEffect(() => {
     transferApi
@@ -96,7 +101,7 @@ export function ExportModal({ sessionId, onClose }: { sessionId: string; onClose
     setSending(true);
     setError(null);
     transferApi
-      .slackSend(preview!.token, picked.id, message)
+      .slackSend(preview!.token, ack, picked.id, message)
       .then((r) => {
         setSent({ to: picked, link: r.link });
         toast({ title: `Sent to ${picked.name} on Slack`, description: preview?.title ?? undefined, tone: "success" });
@@ -109,7 +114,7 @@ export function ExportModal({ sessionId, onClose }: { sessionId: string; onClose
     if (!preview) return;
     setError(null);
     transferApi
-      .export(preview.token)
+      .export(preview.token, ack)
       .then((r) => setSaved(r.path))
       .catch((e: Error) => setError(e.message));
   };
@@ -169,10 +174,15 @@ export function ExportModal({ sessionId, onClose }: { sessionId: string; onClose
               <p className="hint">
                 {slackError
                   ? "The dashboard could not reach your Slack connector, "
-                  : slack!.missing.includes("slack_search_users")
-                    ? "Slack isn't connected to your Claude account, "
-                    : `Your Slack connector can't send files (it has no ${slack!.missing.join(", ")}), `}
-                so save the file and drag it into a Slack message to your colleague.
+                  : slack!.state === "needs-auth"
+                    ? "Slack needs you to sign in again at claude.ai (Settings → Connectors), "
+                    : slack!.state !== "connected"
+                      ? "Slack isn't connected to your Claude account, "
+                      : `Your Slack connector can't send files (it has no ${slack!.missing.join(", ")}), `}
+                so save the file and drag it into a Slack message to your colleague.{" "}
+                <button type="button" className="link-btn inline" onClick={() => checkSlack(true)}>
+                  Check again
+                </button>
               </p>
             )}
             {canSend && (

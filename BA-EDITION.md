@@ -47,9 +47,10 @@ The edition reads through your **claude.ai connectors**, so connect these in cla
 
 **⋮ → Send to a colleague…** packs a session into one `.claudesession` file and shares it in
 a Slack DM. A preview first shows the message count, the MCP connectors it used and any
-credentials it spotted, which must be acknowledged before anything leaves. Save and Send use
-the exact file the preview made, so a session that carries on meanwhile can't add an unchecked
-secret. Everything Claude read is in the file, customer data included. The recipient is picked
+credentials it spotted in any text file of the session, which must be acknowledged before
+anything leaves (the daemon checks this too, not only the page). Save and Send use the exact
+file the preview made, so a session that carries on meanwhile can't add an unchecked secret.
+Symbolic links in the session folder are left out. Everything Claude read is in the file, customer data included. The recipient is picked
 from a Slack search (name, email when shown, title), never guessed.
 
 Sending is four connector calls through the Slack connector (`server/slackSend.ts`): search,
@@ -57,9 +58,11 @@ open the DM, get a signed upload URL, share. The daemon uploads the bytes itself
 never passes through a model. **Save file** writes it to `~/Downloads` and opens Slack for
 sending by hand.
 
-Not every account's Slack connector offers the upload tools. The dialog checks first, from the
-tool list Claude Code reports before any model call (no tokens, cached for an hour). Without
-them, Save file is the way to send, and the dialog says which tools are missing. Files up to
+Not every account's Slack connector offers the upload tools. The dialog checks first by asking
+Claude Code for the connector's state and tools, which takes about 5 seconds and no model call.
+A connector with everything is trusted for an hour, one without the upload tools for ten
+minutes, and one that isn't connected is checked every time the dialog opens (or with **Check
+again**). Without the tools, Save file is the way to send, and the dialog says why. Files up to
 512 MB can be handed over.
 
 **History → Import session** writes it into this machine's Claude Code profile under a new id,

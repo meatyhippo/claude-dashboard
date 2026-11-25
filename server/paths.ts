@@ -88,11 +88,12 @@ export function claudeEnv(extra?: Record<string, string>): Record<string, string
 
 /**
  * `claude <args>` for a shell the dashboard types into, such as a tmux terminal.
- * A shell gets the tmux server's environment, not claudeEnv(), so the profile is
- * named on the command line. The default profile needs nothing.
+ * A shell gets the tmux server's environment and the user's .zshrc, not
+ * claudeEnv(), so the profile is named on the command line. For the default
+ * profile the variable is removed, as claudeEnv() does, in case .zshrc exports it.
  */
 export function claudeShellCommand(args: string): string {
-  if (CLAUDE_HOME === DEFAULT_CLAUDE_HOME) return `claude ${args}`;
+  if (CLAUDE_HOME === DEFAULT_CLAUDE_HOME) return `env -u CLAUDE_CONFIG_DIR claude ${args}`;
   return `CLAUDE_CONFIG_DIR='${CLAUDE_HOME.replace(/'/g, `'\\''`)}' claude ${args}`;
 }
 

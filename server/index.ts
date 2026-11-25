@@ -35,7 +35,7 @@ import {
   type ImageMediaType,
   type InboundImage,
 } from "./agents.ts";
-import { exportSession, importSession, MAX_BUNDLE_BYTES, previewExport } from "./sessionTransfer.ts";
+import { exportSession, importSession, MAX_BUNDLE_BYTES, PreparedFileError, previewExport } from "./sessionTransfer.ts";
 import { findSlackPeople, sendViaSlack, slackStatus } from "./slackSend.ts";
 import {
   addComment,
@@ -1321,7 +1321,11 @@ const server = Bun.serve<PtyData, never>({
       const f = getBaFlags();
       if (!f.enabled || !f.handoff) return json({ error: "session handoff is off (Settings → BA edition)" }, 404);
     }
-    const transferError = (err: unknown, status: number) => json({ error: err instanceof Error ? err.message : String(err) }, status);
+    // 410 only when the preview is gone and a new one fixes it; 409 when credentials need the user's say-so.
+    const transferError = (err: unknown, status: number) => {
+      if (err instanceof PreparedFileError) status = err.reason === "expired" ? 410 : 409;
+      return json({ error: err instanceof Error ? err.message : String(err) }, status);
+    };
     if (p === "/api/transfer/preview" && req.method === "GET") {
       try {
         const preview = previewExport(url.searchParams.get("id") ?? "");
@@ -1332,11 +1336,11 @@ const server = Bun.serve<PtyData, never>({
     }
     // Save and Send take the preview's token: the file the user checked, not a fresh read.
     if (p === "/api/transfer/export" && req.method === "POST") {
-      const body = (await req.json().catch(() => ({}))) as { token?: string };
+      const body = (await req.json().catch(() => ({}))) as { token?: string; ack?: boolean };
       try {
-        return json(exportSession(body.token ?? ""));
+        return json(exportSession(body.token ?? "", body.ack === true));
       } catch (err) {
-        return transferError(err, 410);
+        return transferError(err, 500);
       }
     }
     if (p === "/api/transfer/slack/status" && req.method === "GET") {
@@ -1355,9 +1359,9 @@ const server = Bun.serve<PtyData, never>({
       }
     }
     if (p === "/api/transfer/slack/send" && req.method === "POST") {
-      const body = (await req.json().catch(() => ({}))) as { token?: string; userId?: string; comment?: string };
+      const body = (await req.json().catch(() => ({}))) as { token?: string; ack?: boolean; userId?: string; comment?: string };
       try {
-        return json(await sendViaSlack(body.token ?? "", body.userId ?? "", body.comment ?? ""));
+        return json(await sendViaSlack(body.token ?? "", body.ack === true, body.userId ?? "", body.comment ?? ""));
       } catch (err) {
         return transferError(err, 502);
       }
