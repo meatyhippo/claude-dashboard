@@ -47,14 +47,20 @@ The edition reads through your **claude.ai connectors**, so connect these in cla
 
 **⋮ → Send to a colleague…** packs a session into one `.claudesession` file and shares it in
 a Slack DM. A preview first shows the message count, the MCP connectors it used and any
-credentials it spotted, which must be acknowledged before anything leaves. Everything Claude
-read is in the file, customer data included. The recipient is picked from a Slack search
-(name, email, title), never guessed.
+credentials it spotted, which must be acknowledged before anything leaves. Save and Send use
+the exact file the preview made, so a session that carries on meanwhile can't add an unchecked
+secret. Everything Claude read is in the file, customer data included. The recipient is picked
+from a Slack search (name, email when shown, title), never guessed.
 
 Sending is four connector calls through the Slack connector (`server/slackSend.ts`): search,
 open the DM, get a signed upload URL, share. The daemon uploads the bytes itself, so the file
-never passes through a model. **Save file instead** writes it to `~/Downloads` and opens Slack
-for sending by hand.
+never passes through a model. **Save file** writes it to `~/Downloads` and opens Slack for
+sending by hand.
+
+Not every account's Slack connector offers the upload tools. The dialog checks first, from the
+tool list Claude Code reports before any model call (no tokens, cached for an hour). Without
+them, Save file is the way to send, and the dialog says which tools are missing. Files up to
+512 MB can be handed over.
 
 **History → Import session** writes it into this machine's Claude Code profile under a new id,
 in its own folder under `~/.claude-dashboard/imported`, and resumes it. The colleague carries on

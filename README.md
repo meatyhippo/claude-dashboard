@@ -625,7 +625,7 @@ CLAUDE_HOME=~/.claude bun run dev:beside    # http://localhost:5768
 | --- | --- | --- |
 | `PORT` | `5757` | Daemon port |
 | `DASHBOARD_HOME` | `~/.claude-dashboard` | Where the dashboard keeps its own state |
-| `CLAUDE_HOME` | `~/.claude` | Claude Code's state. **Only ever read**. Overrides everything below |
+| `CLAUDE_HOME` | `~/.claude` | Claude Code's state. **Only read**, except that importing a session adds its transcript here. Overrides everything below |
 | `CLAUDE_CONFIG_DIR` | unset | Claude Code's own variable for a second account; followed when `CLAUDE_HOME` is unset |
 | `ARTIFACT_PORT` | `5759` | Port generated artifacts are served from, deliberately not the API's |
 | `CLAUDE_ARTIFACTS_DIR` | `~/Notes/artifacts` | Default artifact folder. Settings → Artifacts overrides it, and wins once set |

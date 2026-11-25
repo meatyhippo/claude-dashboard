@@ -51,7 +51,11 @@ function pickClaudeHome(): { dir: string; source: "CLAUDE_HOME" | "CLAUDE_CONFIG
 
 const picked = pickClaudeHome();
 
-/** Claude Code's own state. We only ever READ from here. */
+/**
+ * Claude Code's own state. The dashboard reads it, and writes to it in one place
+ * only: importing a session a colleague sent (sessionTransfer.ts) adds a new
+ * transcript under PROJECTS_DIR, under a new id, and never changes an existing one.
+ */
 export const CLAUDE_HOME = picked.dir;
 export const CLAUDE_HOME_SOURCE = picked.source;
 export const SESSIONS_DIR = join(CLAUDE_HOME, "sessions");
@@ -80,6 +84,16 @@ export function claudeEnv(extra?: Record<string, string>): Record<string, string
   if (CLAUDE_HOME === DEFAULT_CLAUDE_HOME) delete env.CLAUDE_CONFIG_DIR;
   else env.CLAUDE_CONFIG_DIR = CLAUDE_HOME;
   return env;
+}
+
+/**
+ * `claude <args>` for a shell the dashboard types into, such as a tmux terminal.
+ * A shell gets the tmux server's environment, not claudeEnv(), so the profile is
+ * named on the command line. The default profile needs nothing.
+ */
+export function claudeShellCommand(args: string): string {
+  if (CLAUDE_HOME === DEFAULT_CLAUDE_HOME) return `claude ${args}`;
+  return `CLAUDE_CONFIG_DIR='${CLAUDE_HOME.replace(/'/g, `'\\''`)}' claude ${args}`;
 }
 
 /** ~/.claude/projects dirs are the cwd with / replaced by -; recover a display path. */

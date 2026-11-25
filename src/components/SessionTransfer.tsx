@@ -24,7 +24,11 @@ const defaultMessage = (title: string | null) =>
  * that concrete; a likely secret has to be acknowledged before anything leaves.
  *
  * The recipient is always picked from a search, never guessed: a file shared in
- * Slack cannot be unshared from here.
+ * Slack cannot be unshared from here. Save and Send both use the file the preview
+ * made, so what was checked is what leaves.
+ *
+ * Not every Slack connector can upload files. Without that, Save file is the way
+ * to send, and the page says why.
  */
 export function ExportModal({ sessionId, onClose }: { sessionId: string; onClose: () => void }) {
   const [preview, setPreview] = useState<TransferPreview | null>(null);
@@ -40,6 +44,15 @@ export function ExportModal({ sessionId, onClose }: { sessionId: string; onClose
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState<{ to: Person; link: string | null } | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
+  const [slack, setSlack] = useState<{ upload: boolean; missing: string[] } | null>(null);
+  const [slackError, setSlackError] = useState<string | null>(null);
+
+  useEffect(() => {
+    transferApi
+      .slackStatus()
+      .then(setSlack)
+      .catch((e: Error) => setSlackError(e.message));
+  }, []);
 
   useEffect(() => {
     transferApi
@@ -58,8 +71,10 @@ export function ExportModal({ sessionId, onClose }: { sessionId: string; onClose
   }, [onClose, sending]);
 
   const secrets = preview?.secrets ?? [];
-  const blocked = !preview || (secrets.length > 0 && !ack);
+  const blocked = !preview || preview.tooLarge || (secrets.length > 0 && !ack);
   const done = !!sent || !!saved;
+  const checking = !slack && !slackError;
+  const canSend = !!slack?.upload;
 
   const find = () => {
     if (!who.trim() || finding) return;
@@ -77,11 +92,11 @@ export function ExportModal({ sessionId, onClose }: { sessionId: string; onClose
   };
 
   const send = () => {
-    if (!picked) return;
+    if (!picked || !preview) return;
     setSending(true);
     setError(null);
     transferApi
-      .slackSend(sessionId, picked.id, message)
+      .slackSend(preview!.token, picked.id, message)
       .then((r) => {
         setSent({ to: picked, link: r.link });
         toast({ title: `Sent to ${picked.name} on Slack`, description: preview?.title ?? undefined, tone: "success" });
@@ -91,9 +106,10 @@ export function ExportModal({ sessionId, onClose }: { sessionId: string; onClose
   };
 
   const saveFile = () => {
+    if (!preview) return;
     setError(null);
     transferApi
-      .export(sessionId)
+      .export(preview.token)
       .then((r) => setSaved(r.path))
       .catch((e: Error) => setError(e.message));
   };
@@ -106,8 +122,8 @@ export function ExportModal({ sessionId, onClose }: { sessionId: string; onClose
           <div>
             <h3 id="transfer-title">Send to a colleague</h3>
             <p className="hint">
-              Sends this session as a file in a Slack DM. They import it in their dashboard and carry on with the full
-              history, signed in to Notion, Front and the rest as themselves.
+              Sends this session as one file. They import it in their dashboard and carry on with the full history,
+              signed in to Notion, Front and the rest as themselves.
             </p>
           </div>
         </div>
@@ -132,7 +148,10 @@ export function ExportModal({ sessionId, onClose }: { sessionId: string; onClose
             <p className="hint">
               Everything Claude read in this session is in the file, customer data included. Send it only to colleagues.
             </p>
-            {preview.large && <p className="hint">This is a large file and may take a while to upload.</p>}
+            {preview.tooLarge && (
+              <p className="transfer-error">This session is too large to hand over ({fmtBytes(preview.bytes)}).</p>
+            )}
+            {preview.large && !preview.tooLarge && <p className="hint">This is a large file and may take a while to upload.</p>}
             {secrets.length > 0 && (
               <div className="transfer-warn">
                 <b>This looks like it contains credentials:</b>{" "}
@@ -145,50 +164,65 @@ export function ExportModal({ sessionId, onClose }: { sessionId: string; onClose
               </div>
             )}
 
-            <div className="field transfer-field">
-              <span id="transfer-to">Send to</span>
-              <div className="transfer-find">
-                <input
-                  value={who}
-                  placeholder="Name or email"
-                  aria-labelledby="transfer-to"
-                  disabled={sending}
-                  onChange={(e) => setWho(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      find();
-                    }
-                  }}
-                />
-                <button className="icon-btn" disabled={!who.trim() || finding || sending} onClick={find}>
-                  {finding ? "Searching…" : "Find"}
-                </button>
-              </div>
-            </div>
-            {people && people.length === 0 && <p className="hint">Nobody in Slack matched “{who}”.</p>}
-            {people && people.length > 0 && (
-              <div className="transfer-people" role="radiogroup" aria-label="Recipient">
-                {people.map((p) => (
-                  <label key={p.id} className={`transfer-person ${picked?.id === p.id ? "on" : ""}`}>
-                    <input
-                      type="radio"
-                      name="transfer-person"
-                      checked={picked?.id === p.id}
-                      disabled={sending}
-                      onChange={() => setPicked(p)}
-                    />
-                    <span className="transfer-person-name">{p.name}</span>
-                    <span className="transfer-person-title">{[p.email, p.title].filter(Boolean).join(" · ")}</span>
-                  </label>
-                ))}
-              </div>
+            {checking && <p className="hint">Checking what your Slack connector can do…</p>}
+            {!checking && !canSend && (
+              <p className="hint">
+                {slackError
+                  ? "The dashboard could not reach your Slack connector, "
+                  : slack!.missing.includes("slack_search_users")
+                    ? "Slack isn't connected to your Claude account, "
+                    : `Your Slack connector can't send files (it has no ${slack!.missing.join(", ")}), `}
+                so save the file and drag it into a Slack message to your colleague.
+              </p>
             )}
-            {picked && (
-              <label className="field transfer-field">
-                <span>Message</span>
-                <textarea rows={3} value={message} disabled={sending} onChange={(e) => setMessage(e.target.value)} />
-              </label>
+            {canSend && (
+              <>
+                <div className="field transfer-field">
+                  <span id="transfer-to">Send to</span>
+                  <div className="transfer-find">
+                    <input
+                      value={who}
+                      placeholder="Name or email"
+                      aria-labelledby="transfer-to"
+                      disabled={sending}
+                      onChange={(e) => setWho(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          find();
+                        }
+                      }}
+                    />
+                    <button className="icon-btn" disabled={!who.trim() || finding || sending} onClick={find}>
+                      {finding ? "Searching…" : "Find"}
+                    </button>
+                  </div>
+                </div>
+                {people && people.length === 0 && <p className="hint">Nobody in Slack matched “{who}”.</p>}
+                {people && people.length > 0 && (
+                  <div className="transfer-people" role="radiogroup" aria-label="Recipient">
+                    {people.map((p) => (
+                      <label key={p.id} className={`transfer-person ${picked?.id === p.id ? "on" : ""}`}>
+                        <input
+                          type="radio"
+                          name="transfer-person"
+                          checked={picked?.id === p.id}
+                          disabled={sending}
+                          onChange={() => setPicked(p)}
+                        />
+                        <span className="transfer-person-name">{p.name}</span>
+                        <span className="transfer-person-title">{[p.email, p.title].filter(Boolean).join(" · ")}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+                {picked && (
+                  <label className="field transfer-field">
+                    <span>Message</span>
+                    <textarea rows={3} value={message} disabled={sending} onChange={(e) => setMessage(e.target.value)} />
+                  </label>
+                )}
+              </>
             )}
             {sending && <p className="hint">Uploading and sharing in Slack; this takes about half a minute.</p>}
           </>
@@ -214,7 +248,7 @@ export function ExportModal({ sessionId, onClose }: { sessionId: string; onClose
         )}
 
         <div className="modal-actions">
-          {!done && (
+          {!done && canSend && (
             <button
               className="link-btn transfer-save"
               disabled={blocked || sending}
@@ -227,9 +261,14 @@ export function ExportModal({ sessionId, onClose }: { sessionId: string; onClose
           <button className="icon-btn" disabled={sending} onClick={onClose}>
             {done ? "Done" : "Cancel"}
           </button>
-          {!done && (
+          {!done && canSend && (
             <button className="icon-btn primary" disabled={blocked || !picked || sending} onClick={send}>
               <SendIcon /> {sending ? "Sending…" : picked ? `Send to ${picked.name.split(" ")[0]}` : "Send on Slack"}
+            </button>
+          )}
+          {!done && !canSend && (
+            <button className="icon-btn primary" disabled={blocked || checking} onClick={saveFile}>
+              Save file
             </button>
           )}
         </div>

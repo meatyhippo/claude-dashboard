@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir, platform, userInfo } from "node:os";
-import { basename, join, relative, sep } from "node:path";
+import { join, relative, sep } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { CLAUDE_HOME, DATA_DIR, PROJECTS_DIR } from "./paths.ts";
 
@@ -58,6 +58,15 @@ const SECRET_PATTERNS: { label: string; re: RegExp }[] = [
 /** Past this, the bundle is still made, but the preview says so. */
 const LARGE_BYTES = 50 * 1024 * 1024;
 
+/**
+ * The largest file that can be handed over: the import route takes it in one
+ * request, and index.ts sets the server's request limit to this.
+ */
+export const MAX_BUNDLE_BYTES = 512 * 1024 * 1024;
+
+/** Saved tool output read as text: scanned for credentials on export, paths rewritten on import. */
+const TEXT_FILE = /\.(json|txt|md|html?)$/i;
+
 export type Manifest = {
   title: string | null;
   sessionId: string;
@@ -82,12 +91,16 @@ type Bundle = {
 };
 
 export type ExportPreview = {
+  /** Names the exact file this preview describes; Save and Send use that file, never a newer one. */
+  token: string;
   title: string | null;
   messages: number;
   mcpServers: string[];
   files: number;
   bytes: number;
   large: boolean;
+  /** Over MAX_BUNDLE_BYTES: it could not be imported, so it is not offered. */
+  tooLarge: boolean;
   secrets: { label: string; count: number }[];
 };
 
@@ -136,7 +149,12 @@ function walk(dir: string): string[] {
   }
   for (const name of entries) {
     const p = join(dir, name);
-    const st = statSync(p);
+    let st;
+    try {
+      st = statSync(p);
+    } catch {
+      continue; // a broken link, or deleted while we looked
+    }
     if (st.isDirectory()) out.push(...walk(p));
     else if (st.isFile()) out.push(p);
   }
@@ -195,12 +213,17 @@ function build(sessionId: string): { bundle: Bundle; texts: string[] } | null {
   const texts = [transcript];
   for (const p of walk(sessionDir)) {
     const rel = relative(sessionDir, p).split(sep).join("/");
-    let bytes = readFileSync(p);
+    let bytes: Buffer;
+    try {
+      bytes = readFileSync(p);
+    } catch {
+      continue; // unreadable or gone: the session resumes without it
+    }
     if (rel.endsWith(".jsonl")) {
       const text = stripJsonl(bytes.toString("utf8"));
       texts.push(text);
       bytes = Buffer.from(text, "utf8");
-    } else if (/\.(json|txt|md|html?)$/i.test(rel)) {
+    } else if (TEXT_FILE.test(rel)) {
       texts.push(bytes.toString("utf8"));
     }
     files[rel] = bytes.toString("base64");
@@ -230,25 +253,10 @@ function build(sessionId: string): { bundle: Bundle; texts: string[] } | null {
   };
 }
 
-export function previewExport(sessionId: string): ExportPreview | null {
-  const b = build(sessionId);
-  if (!b) return null;
-  const bytes = gzipSync(JSON.stringify(b.bundle)).length;
-  return {
-    title: b.bundle.manifest.title,
-    messages: b.bundle.manifest.messages,
-    mcpServers: b.bundle.manifest.mcpServers,
-    files: Object.keys(b.bundle.files).length,
-    bytes,
-    large: bytes > LARGE_BYTES,
-    secrets: scanSecrets(b.texts),
-  };
-}
-
 function fileStem(title: string | null, sessionId: string): string {
   const words = (title ?? "session")
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
@@ -256,25 +264,56 @@ function fileStem(title: string | null, sessionId: string): string {
   return `${words || "session"}-${sessionId.slice(0, 8)}`;
 }
 
-/** The finished file, in memory: what Slack is sent, and what Save writes. */
-export function bundleFile(sessionId: string): { name: string; title: string | null; bytes: Uint8Array<ArrayBuffer> } | null {
+export type PreparedFile = { name: string; title: string | null; bytes: Uint8Array<ArrayBuffer> };
+
+/**
+ * Files made for a preview, by token. The credential check and its
+ * acknowledgement are about these exact bytes, so Save and Send use them rather
+ * than reading the session again: a live session may have read a secret since.
+ */
+const prepared = new Map<string, PreparedFile & { at: number }>();
+const PREPARED_TTL_MS = 60 * 60_000;
+const PREPARED_MAX = 3;
+
+export function previewExport(sessionId: string): ExportPreview | null {
   const b = build(sessionId);
   if (!b) return null;
+  const bytes = new Uint8Array(gzipSync(JSON.stringify(b.bundle)));
+  const token = randomUUID();
+  const now = Date.now();
+  for (const [k, v] of prepared) if (now - v.at > PREPARED_TTL_MS) prepared.delete(k);
+  // Bundles can be large; keep only the newest few.
+  while (prepared.size >= PREPARED_MAX) prepared.delete(prepared.keys().next().value!);
+  const title = b.bundle.manifest.title;
+  prepared.set(token, { name: fileStem(title, sessionId) + EXT, title, bytes, at: now });
   return {
-    name: fileStem(b.bundle.manifest.title, sessionId) + EXT,
-    title: b.bundle.manifest.title,
-    bytes: new Uint8Array(gzipSync(JSON.stringify(b.bundle))),
+    token,
+    title,
+    messages: b.bundle.manifest.messages,
+    mcpServers: b.bundle.manifest.mcpServers,
+    files: Object.keys(b.bundle.files).length,
+    bytes: bytes.length,
+    large: bytes.length > LARGE_BYTES,
+    tooLarge: bytes.length > MAX_BUNDLE_BYTES,
+    secrets: scanSecrets(b.texts),
   };
 }
 
+/** The file a preview made. Throws when it is gone, so nothing unchecked is ever sent. */
+export function preparedFile(token: string): PreparedFile {
+  const f = prepared.get(token);
+  if (!f || Date.now() - f.at > PREPARED_TTL_MS) throw new Error("this preview has expired; close the window and open Send again");
+  if (f.bytes.length > MAX_BUNDLE_BYTES) throw new Error(`the session is too large to hand over (over ${MAX_BUNDLE_BYTES / 1024 / 1024} MB)`);
+  return f;
+}
+
 /**
- * Write the bundle where a person will look for it — ~/Downloads when it exists —
- * then show it in Finder and bring Slack forward, so sending it is one drag. The
- * fallback for when sending through the Slack connector is not an option.
+ * Write the previewed file where a person will look for it (~/Downloads when it
+ * exists), then show it in Finder and bring Slack forward, so sending it is one
+ * drag. The way to send when the Slack connector cannot upload files.
  */
-export function exportSession(sessionId: string): { path: string } | null {
-  const f = bundleFile(sessionId);
-  if (!f) return null;
+export function exportSession(token: string): { path: string } {
+  const f = preparedFile(token);
   const downloads = join(homedir(), "Downloads");
   const dir = existsSync(downloads) ? downloads : join(DATA_DIR, "exports");
   mkdirSync(dir, { recursive: true });
@@ -304,6 +343,9 @@ function parseBundle(raw: Uint8Array): Bundle {
  * Every pair in one pass, longest match first, so the session folder wins over the
  * profile it sits in and the profile over the home directory around both.
  *
+ * A match must end where a path's name ends: /Users/jan is not the start of
+ * /Users/janet, nor ~/proj of ~/proj-archive. A dot may follow (`<id>.jsonl`).
+ *
  * One pass rather than one replace per pair, because the outputs overlap the
  * inputs: ~/.claude → ~/.claude-work run after the session folder has already
  * become ~/.claude-work/… matches again and yields ~/.claude-work-work/….
@@ -312,7 +354,8 @@ export function rewriter(pairs: [string, string][]): (s: string) => string {
   const map = new Map(pairs.filter(([from, to]) => from && from !== to));
   if (map.size === 0) return (s) => s;
   const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp([...map.keys()].sort((a, b) => b.length - a.length).map(escape).join("|"), "g");
+  const keys = [...map.keys()].sort((a, b) => b.length - a.length).map(escape);
+  const re = new RegExp(`(?:${keys.join("|")})(?![A-Za-z0-9_-])`, "g");
   return (s) => s.replace(re, (hit) => map.get(hit) ?? hit);
 }
 
@@ -370,7 +413,7 @@ export function importSession(raw: Uint8Array, folder?: string): { sessionId: st
     mkdirSync(join(dest, ".."), { recursive: true });
     let bytes = Buffer.from(b64, "base64");
     if (/\.jsonl$/i.test(rel)) bytes = Buffer.from(withCwd(rewrite(bytes.toString("utf8"))), "utf8");
-    else if (/\.(json|txt|md)$/i.test(basename(rel))) bytes = Buffer.from(rewrite(bytes.toString("utf8")), "utf8");
+    else if (TEXT_FILE.test(rel)) bytes = Buffer.from(rewrite(bytes.toString("utf8")), "utf8");
     writeFileSync(dest, bytes);
   }
   return { sessionId: newId, cwd, title: m.title ? `${m.title} (from ${m.exportedBy})` : `From ${m.exportedBy}` };

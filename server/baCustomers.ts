@@ -37,7 +37,7 @@ import { keyPoints, mailView, readThread, reply, suggestReply, threadAsText, war
 import { handleFeedbackRoute } from "./baFeedback.ts";
 import { handlePublishedRoute } from "./baPublished.ts";
 import { askQai, composeQai, initQai, listQai, parseThread, qaiReplies, qaiToday } from "./baQai.ts";
-import { SCRATCH_DIR } from "./paths.ts";
+import { claudeShellCommand, SCRATCH_DIR } from "./paths.ts";
 import { createProject, ensureProjectFolder } from "./workspaces.ts";
 
 /**
@@ -861,7 +861,7 @@ async function startCloud(cwd: string, title: string, prompt: string): Promise<{
   writeFileSync(file, prompt);
   const made = await createTerminal({ folder: cwd, workspaceId: null, title: `Cloud · ${title}`.slice(0, 80) });
   if ("error" in made) return { ok: false, error: made.error };
-  const cmd = `claude --cloud "$(cat ${JSON.stringify(file)})"`;
+  const cmd = claudeShellCommand(`--cloud "$(cat ${JSON.stringify(file)})"`);
   const sent = await tmux("send-keys", "-t", made.session, cmd, "Enter");
   if (!sent.ok) return { ok: false, error: "could not start the cloud session in the terminal" };
   // The CLI creates the session, prints its claude.ai/code link and returns. Wait for the link, then the
@@ -1117,7 +1117,7 @@ export async function handleBaRoute(req: Request, url: URL): Promise<Response | 
       const cwd = (b?.projectId && ensureProjectFolder(b.projectId)) || SCRATCH_DIR;
       const made = await createTerminal({ folder: cwd, workspaceId: null, title: "From the cloud" });
       if ("error" in made) return json({ error: made.error }, 400);
-      await tmux("send-keys", "-t", made.session, `claude --teleport ${id}`, "Enter");
+      await tmux("send-keys", "-t", made.session, claudeShellCommand(`--teleport ${id}`), "Enter");
       return json({ ok: true, key: terminalKey(made.id) });
     }
     if (p === "/api/ba/choose-folder" && req.method === "POST") {

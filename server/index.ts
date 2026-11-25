@@ -35,8 +35,8 @@ import {
   type ImageMediaType,
   type InboundImage,
 } from "./agents.ts";
-import { exportSession, importSession, previewExport } from "./sessionTransfer.ts";
-import { findSlackPeople, sendViaSlack } from "./slackSend.ts";
+import { exportSession, importSession, MAX_BUNDLE_BYTES, previewExport } from "./sessionTransfer.ts";
+import { findSlackPeople, sendViaSlack, slackStatus } from "./slackSend.ts";
 import {
   addComment,
   buildPrompt,
@@ -1085,6 +1085,8 @@ const server = Bun.serve<PtyData, never>({
   // on this machine, so the server must not be reachable from the network.
   hostname: "127.0.0.1",
   idleTimeout: 0,
+  // A session handed over by a colleague arrives in one request (Bun's default is 128 MB).
+  maxRequestBodySize: MAX_BUNDLE_BYTES + 1024 * 1024,
   websocket: {
     // Big enough for a screenful of a noisy pane; the broker blocks rather than
     // buffering past it, so the program slows down instead of this growing.
@@ -1319,29 +1321,45 @@ const server = Bun.serve<PtyData, never>({
       const f = getBaFlags();
       if (!f.enabled || !f.handoff) return json({ error: "session handoff is off (Settings → BA edition)" }, 404);
     }
+    const transferError = (err: unknown, status: number) => json({ error: err instanceof Error ? err.message : String(err) }, status);
     if (p === "/api/transfer/preview" && req.method === "GET") {
-      const preview = previewExport(url.searchParams.get("id") ?? "");
-      return preview ? json(preview) : json({ error: "no transcript for that session" }, 404);
+      try {
+        const preview = previewExport(url.searchParams.get("id") ?? "");
+        return preview ? json(preview) : json({ error: "no transcript for that session" }, 404);
+      } catch (err) {
+        return transferError(err, 500);
+      }
     }
+    // Save and Send take the preview's token: the file the user checked, not a fresh read.
     if (p === "/api/transfer/export" && req.method === "POST") {
-      const body = (await req.json().catch(() => ({}))) as { sessionId?: string };
-      const r = exportSession(body.sessionId ?? "");
-      return r ? json(r) : json({ error: "no transcript for that session" }, 404);
+      const body = (await req.json().catch(() => ({}))) as { token?: string };
+      try {
+        return json(exportSession(body.token ?? ""));
+      } catch (err) {
+        return transferError(err, 410);
+      }
+    }
+    if (p === "/api/transfer/slack/status" && req.method === "GET") {
+      try {
+        return json(await slackStatus(url.searchParams.get("refresh") === "1"));
+      } catch (err) {
+        return transferError(err, 502);
+      }
     }
     if (p === "/api/transfer/slack/people" && req.method === "POST") {
       const body = (await req.json().catch(() => ({}))) as { query?: string };
       try {
         return json({ people: await findSlackPeople(body.query ?? "") });
       } catch (err) {
-        return json({ error: err instanceof Error ? err.message : String(err) }, 502);
+        return transferError(err, 502);
       }
     }
     if (p === "/api/transfer/slack/send" && req.method === "POST") {
-      const body = (await req.json().catch(() => ({}))) as { sessionId?: string; userId?: string; comment?: string };
+      const body = (await req.json().catch(() => ({}))) as { token?: string; userId?: string; comment?: string };
       try {
-        return json(await sendViaSlack(body.sessionId ?? "", body.userId ?? "", body.comment ?? ""));
+        return json(await sendViaSlack(body.token ?? "", body.userId ?? "", body.comment ?? ""));
       } catch (err) {
-        return json({ error: err instanceof Error ? err.message : String(err) }, 502);
+        return transferError(err, 502);
       }
     }
     if (p === "/api/transfer/import" && req.method === "POST") {

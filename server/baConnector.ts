@@ -137,6 +137,46 @@ async function oneCallInner(model: string, tool: string, input: unknown, reason:
 }
 
 /**
+ * The connector tools on the user's claude.ai account, by full name. Which tools
+ * a connector offers differs between accounts (one person's Slack has file
+ * uploads, another's does not). Claude Code lists them in its init message,
+ * before the first model call, so the query is stopped right there.
+ */
+export async function connectorTools(): Promise<string[]> {
+  mkdirSync(SCRATCH_DIR, { recursive: true });
+  const stop = new AbortController();
+  const limit = setTimeout(() => stop.abort(), 60_000);
+  try {
+    const q = query({
+      prompt: "Reply with the single word: ok.",
+      options: {
+        env: claudeEnv(),
+        cwd: SCRATCH_DIR,
+        model: getBaModels().sync,
+        maxTurns: 1,
+        maxThinkingTokens: 0,
+        persistSession: false,
+        settingSources: ["user"],
+        skills: [],
+        disallowedTools: LOCAL_TOOLS,
+        allowedTools: [],
+        permissionMode: "dontAsk",
+        abortController: stop,
+      },
+    });
+    for await (const msg of q as AsyncIterable<any>) {
+      if (msg.type === "system" && msg.subtype === "init" && Array.isArray(msg.tools)) {
+        return (msg.tools as string[]).filter((t) => t.startsWith("mcp__"));
+      }
+    }
+    throw new Error("Claude Code did not list its tools");
+  } finally {
+    clearTimeout(limit);
+    stop.abort();
+  }
+}
+
+/**
  * Claude Code moves a large tool result to a file and hands back a pointer
  * ("<persisted-output> … Full output saved to: /path"). Read the file instead.
  */
