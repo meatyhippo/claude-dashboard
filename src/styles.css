@@ -10733,6 +10733,10 @@ a.front-btn:not(.icon-btn) { display: inline-block; padding: 1px 7px; text-decor
 .mcp-banner strong { color: var(--text-primary); }
 .mcp-banner .chat-connect { margin-top: 0; }
 
+/* BA edition: a mail linked to a customer's workspace (Latest mail, Mailbox, workspace page) */
+.co-item-actions, .mail-ws-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: flex-end; flex: none; max-width: 60%; }
+.mail-ws-pick { max-width: 180px; }
+
 /* Workbench: Front thread picker (checkboxes, on-ticket first, save at the bottom) */
 .wb-fmenu { width: min(520px, calc(100vw - 16px)); max-height: min(70vh, 640px); overflow: auto; }
 .wb-fmenu-sec { padding: 8px 8px 4px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); }

@@ -1761,6 +1761,12 @@ export const baApi = {
     post<{ ok: true; offerFrontLink?: boolean; currentFrontLink?: string | null }>("/api/ba/triage", { thread, projectId, irUrl, source }),
   setFrontLink: (irUrl: string, link: string, projectId?: number) => post<{ ok: true }>("/api/ba/ir/front-link", { irUrl, link, projectId }),
   untriage: (threadId: string) => baDel<{ ok: true }>(`/api/ba/triage?thread=${encodeURIComponent(threadId)}`),
+  /** The customer's workspaces a mail can belong to, and the one it is linked to. */
+  mailWorkspace: (threadId: string, projectId?: number | null) =>
+    get<{ workspaceId: number | null; workspaces: { id: number; title: string }[] }>(`/api/ba/mail-workspace?thread=${encodeURIComponent(threadId)}${projectId ? `&project=${projectId}` : ""}`),
+  setMailWorkspace: (threadId: string, workspaceId: number | null, place?: { projectId: number; thread: BaFrontThread }) =>
+    post<{ ok: true }>("/api/ba/mail-workspace", { threadId, workspaceId, ...(place ?? {}) }),
+  workspaceMail: (workspaceId: number) => get<{ projectId: number; threads: BaFrontThread[] }>(`/api/ba/workspace-mail?workspace=${workspaceId}`),
   published: () => get<{ published: BaPublished[]; snapshot: string }>("/api/ba/published"),
   action: (a: BaAction) => post<{ ok: true; key: string; cloud?: boolean; url?: string }>("/api/ba/action", a),
   threadFiles: (threadId: string, save?: boolean) => (save ? post<{ dir: string | null; rel: string | null; files: string[]; error?: string | null }>(`/api/ba/mail/thread/${threadId}/files`) : get<{ dir: string | null; rel: string | null; files: string[]; error?: string | null }>(`/api/ba/mail/thread/${threadId}/files`)),
