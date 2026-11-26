@@ -71,7 +71,7 @@ export const BA_TEMPLATES: Template[] = [
       "3. Follow the Excalidraw styleguide in the professional-services:prof-svc-scoping skill (references/excalidraw.md) exactly: Qargo (TMS) centred in green #ebfbee; customer stack left, third parties right; rounded rectangles with the name inside; " +
       "fills: out-of-the-box red #ffc9c9 (accounting #ffc9c9, FMS/telematics #ff8787, orders/visibility #fa5252), custom request orange #ffa94d, customer middleware lila #9775fa, customer API/EDI blue #a5d8ff; " +
       "arrows bound to both blocks, labelled 'description\\n(transport)' using the Notion flow names and numbers, solid = confirmed, dotted = unconfirmed, stroke #1e1e1e working / #e8590c in development / #40c057 tested; strokeWidth 1; hand-drawn font.\n" +
-      "4. Write it to ./drawings/<Customer name>.excalidraw in this folder (create the folder if needed), so it shows up in the dashboard's Drawings page. Then tell me to run Style check on it.",
+      "4. Write it to drawings/<customer-name>.excalidraw in the customer's own folder (not a workspace subfolder inside it; create drawings/ if needed), so it shows up in the customer's Drawings on the dashboard. Then tell me to run Style check on it.",
   }),
   template("ba-morning-inbox", {
     name: "Morning inbox",

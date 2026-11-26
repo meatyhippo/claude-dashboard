@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync,
 import { join, sep } from "node:path";
 import { claudeEnv, DATA_DIR } from "./paths.ts";
 import { scanCommands } from "./commands.ts";
+import { baSessionRules } from "./baSessionRules.ts";
 import { getBaFlags } from "./baEdition.ts";
 import {
   query,
@@ -818,7 +819,7 @@ export function startAgent(opts: StartOptions): string {
       // Research sessions are deliberately bare; every other one gets the org's skills.
       // BA edition (flag chatSkills): a chat without a folder gets them as well.
       plugins: opts.research && !researchWithSkills ? undefined : orgPlugins(),
-      ...(opts.research ? {} : { systemPrompt: { type: "preset" as const, preset: "claude_code" as const, append: DRAFT_RULE } }),
+      ...(opts.research ? {} : { systemPrompt: { type: "preset" as const, preset: "claude_code" as const, append: DRAFT_RULE + baSessionRules(opts.cwd) } }),
       outputFormat: opts.outputSchema ? { type: "json_schema", schema: opts.outputSchema } : undefined,
       includePartialMessages: true,
       // Without these a Task call is an opaque tool row: the first forwards the

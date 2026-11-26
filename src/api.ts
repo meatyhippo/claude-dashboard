@@ -1750,6 +1750,9 @@ export const baApi = {
   customers: () => get<{ customers: BaCustomer[] }>("/api/ba/customers"),
   createCustomer: (urls: string[], name?: string) => post<{ customer: BaCustomer }>("/api/ba/customers", { urls, name }),
   customer: (projectId: number) => get<{ customer: BaCustomer | null }>(`/api/ba/customers/${projectId}`),
+  strayDrawings: (projectId: number) =>
+    get<{ drawings: { path: string; rel: string; modified: number; size: number }[] }>(`/api/ba/customers/${projectId}/stray-drawings`),
+  adoptStrayDrawing: (projectId: number, path: string) => post<{ ok: true; name: string }>(`/api/ba/customers/${projectId}/stray-drawings`, { path }),
   setCustomer: (projectId: number, s: { frontQuery?: string; extraDomains?: string }) => put<{ customer: BaCustomer | null }>(`/api/ba/customers/${projectId}`, s),
   requirements: (projectId: number, refresh?: boolean) => get<Cached<BaRequirement[]>>(`/api/ba/customers/${projectId}/requirements${qs(refresh)}`),
   slack: (projectId: number, refresh?: boolean) => get<Cached<BaSlackPost[]>>(`/api/ba/customers/${projectId}/slack${qs(refresh)}`),

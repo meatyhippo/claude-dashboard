@@ -10733,6 +10733,12 @@ a.front-btn:not(.icon-btn) { display: inline-block; padding: 1px 7px; text-decor
 .mcp-banner strong { color: var(--text-primary); }
 .mcp-banner .chat-connect { margin-top: 0; }
 
+/* BA edition: drawings a session left outside the customer's drawings/ folder */
+.stray-drawings { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
+.stray-drawings h3 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+.stray-drawing { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+.stray-drawing code { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+
 /* BA edition: a mail linked to a customer's workspace (Latest mail, Mailbox, workspace page) */
 .co-item-actions, .mail-ws-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: flex-end; flex: none; max-width: 60%; }
 .mail-ws-pick { max-width: 180px; }

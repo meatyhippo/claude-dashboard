@@ -6,6 +6,7 @@ import CustomerOverview from "./CustomerOverview.tsx";
 import { TaskQuickAdd } from "./tasks/TaskQuickAdd.tsx";
 import { fileTab, Workbench } from "./workbench/Workbench.tsx";
 import BaFilesBar from "./BaFilesBar.tsx";
+import { StrayDrawings } from "./StrayDrawings.tsx";
 import { useRef, useState } from "react";
 import { artifactApi, drawingApi, noteApi, prParam, taskApi, workspaceApi, type Artifact, type Project, type Workspace } from "../api.ts";
 import { artifactKey } from "../../shared/artifacts.ts";
@@ -557,6 +558,7 @@ export function ProjectPage({
                   ))}
                 </div>
               )}
+              <StrayDrawings projectId={project.id} />
             </section>
 
             <section className="panel prj-box">

@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { cleanSnippet } from "./baMail.ts";
 import type { Database } from "bun:sqlite";
 import { handleWbRoute } from "./wb.ts";
@@ -29,6 +30,8 @@ import {
 import { getAgent, startAgent } from "./agents.ts";
 import { baseFields, sessionDataShaper } from "./baDataShaper.ts";
 import { initSessionContext, recordSessionLink, sessionContext, threadIdIn } from "./baSessionContext.ts";
+import { adoptStrayDrawing, strayDrawings } from "./baSessionRules.ts";
+import { reconcileDrawings } from "./drawings.ts";
 import { lastQargoMcpStatus, mcpHowTo, qargoMcpStatus } from "./baQargoMcp.ts";
 import { cached, connectorCall, dropCache, FRONT_SEARCH, initConnector, markStale, NOTION_FETCH, NOTION_SELF, notionSql, parseJson, peekCache } from "./baConnector.ts";
 import { getBaFlags, getBaModels, getMailStyle, mailStyleBlock, setBaFlags, setBaModels, setMailStyle } from "./baEdition.ts";
@@ -1000,7 +1003,7 @@ function buildAction(a: BaAction): { ok: true; cwd: string; title: string; promp
         (a.urls?.length ? `Only these integration requests belong on the diagram:\n${a.urls.map((u) => `- ${u}`).join("\n")}\n\n` : "") +
         `Draw ${name}'s integration landscape as an Excalidraw diagram. Read their integration requests in Notion (Customer Tasks whose Company is one of the deals below) ` +
         `and follow the Excalidraw styleguide in the professional-services:prof-svc-scoping skill (references/excalidraw.md) exactly. ` +
-        `Write it to ./drawings/${name.replace(/[\\/:*?"<>|]/g, "")}.excalidraw in this folder so it appears on the dashboard's Drawings page, then tell me to run Style check.${ctx}`,
+        `Write it to ${join(cwd, "drawings", name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "landscape")}.excalidraw (create the folder if needed) so it appears in the customer's Drawings on the dashboard, then tell me to run Style check.${ctx}`,
     },
     briefing: { title: `Briefing · ${name}`, prompt: `/qargo:pre-call-briefing\n\nBrief me for my next call with ${name}.${ctx}` },
     "ir-from-front": { title: `New IR · ${label}`, prompt: `/create-integration-request\n\nCreate an integration request for ${name} from this Front conversation: ${a.url}${a.prompt ? `\n\n${a.prompt}` : ""}${ctx}${mailText(a.url)}` },
@@ -1257,6 +1260,13 @@ export async function handleBaRoute(req: Request, url: URL): Promise<Response | 
       if (p.endsWith("/requirements")) return json(await requirements(id, refresh));
       if (p.endsWith("/front")) return json(await customerFront(id, refresh));
       if (p.endsWith("/slack")) return json(await customerSlack(id, refresh));
+      if (p.endsWith("/stray-drawings") && req.method === "GET") return json({ drawings: strayDrawings(id) });
+      if (p.endsWith("/stray-drawings") && req.method === "POST") {
+        const r = adoptStrayDrawing(id, (await body<{ path?: string }>())?.path ?? "");
+        if (!r.ok) return json(r, 400);
+        reconcileDrawings();
+        return json(r);
+      }
       if (req.method === "GET") return json({ customer: getCustomer(id) });
       if (req.method === "PUT") {
         const b = await body<{ frontQuery?: string; extraDomains?: string }>();
