@@ -326,7 +326,24 @@ function insertProject(name: string, opts: { generalKey?: string; explicit?: boo
 /** A repository's standing project: where its main checkout's work goes when it is part of no change. */
 function generalProject(key: string, name: string): number {
   const found = db.query<{ id: number }, [string]>("SELECT id FROM projects WHERE general_key = ?").get(key);
-  return found?.id ?? insertProject(name, { generalKey: key });
+  const label = key.startsWith("dir:") ? folderLabels.get(tailOf(key.slice(4))) : undefined;
+  return found?.id ?? insertProject(label ?? name, { generalKey: key });
+}
+
+/**
+ * Give the automatic project of a folder a readable name (e.g. a Workbench ticket's
+ * folder is a 32-hex Notion id). Only touches projects the daemon named itself.
+ */
+/** Names waiting for a folder's project, by the folder's last two path parts: the project may not exist yet. */
+const folderLabels = new Map<string, string>();
+const tailOf = (folder: string) => folder.replace(/[\\/]+$/, "").split(/[\\/]/).slice(-2).join("/");
+
+export function labelFolderProject(folder: string, name: string) {
+  if (!name.trim()) return;
+  const tail = tailOf(folder);
+  folderLabels.set(tail, name.trim().slice(0, 200));
+  if (!db) return;
+  db.query("UPDATE projects SET name = ? WHERE name_source = 'auto' AND general_key LIKE ? AND name != ?").run(name.trim().slice(0, 200), `dir:%/${tail}`, name.trim().slice(0, 200));
 }
 
 /** Tell the path helpers which projects have a folder, so a file under one is known for whose it is. */
@@ -418,7 +435,7 @@ function projectFor(w: Placeable): number {
       .get(w.branch, w.project_key);
     if (twin) return twin.project_id;
   }
-  return insertProject(goal || w.branch || basename(w.folder) || w.project_name);
+  return insertProject(goal || w.branch || folderLabels.get(tailOf(w.folder)) || basename(w.folder) || w.project_name);
 }
 
 /** Give every workspace that has no project one. Workspaces that were linked by hand land in the same project. */

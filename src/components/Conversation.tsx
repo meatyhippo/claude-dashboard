@@ -1,6 +1,6 @@
 import { baFlags } from "../baFlags.ts";
 import AutoBlocked from "./AutoBlocked.tsx";
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   agentApi,
   agentBus,
@@ -8,6 +8,7 @@ import {
   commentApi,
   fileApi,
   fmtUsd,
+  mcpApi,
   settingsApi,
   toolSummary,
   type AgentDetail,
@@ -217,8 +218,14 @@ export function LiveConversation({
   onSettings,
   onGone,
   scrollJumpVariant = "float",
+  earlier,
+  footer,
 }: {
   agentKey: string;
+  /** History from before the dashboard took over, shown above the live timeline. */
+  earlier?: ReactNode;
+  /** Shown under the last turn, e.g. a next-action button for the reply above it. */
+  footer?: ReactNode;
   settings?: Settings | null;
   onSettings?: (s: Settings) => void;
   onGone?: () => void;
@@ -857,12 +864,28 @@ export function LiveConversation({
   const visible = hideTools
     ? inTab.filter(
         (i) =>
-          i.kind !== "tool" &&
+          (i.kind !== "tool" || isDraftCall(i)) &&
           i.kind !== "thinking" &&
           !(i.kind === "permission" && i.decision !== null),
       )
     : inTab;
   const hiddenCount = inTab.length - visible.length;
+  // The footer (a Workbench next-action button) belongs to the message that named it: it
+  // sits at the end of that turn, before its "Done" line, whatever ran after it. Named in
+  // a turn from before a restart (only in the earlier transcript), it sits under that.
+  // -2 = right after the earlier transcript; -1 = nowhere to anchor, so at the end.
+  const footerAt = (() => {
+    if (!footer) return -1;
+    let set = -1;
+    inTab.forEach((i, n) => { if (i.kind === "tool" && /set_next_action$/.test(i.name)) set = n; });
+    if (set < 0) return earlier ? -2 : -1;
+    const stop = inTab.findIndex((i, n) => n > set && (i.kind === "user" || i.kind === "result"));
+    const end = stop < 0 ? inTab.length : stop;
+    const pos = new Map(inTab.map((i, n) => [i, n] as const));
+    let at = -1;
+    visible.forEach((i, n) => { if ((pos.get(i) ?? Infinity) < end) at = n; });
+    return at;
+  })();
 
   const busy = data.status === "thinking" || data.status === "starting";
   const ended = data.status === "ended" || data.status === "error";
@@ -975,6 +998,8 @@ export function LiveConversation({
 
       <div className="chat-scroll-wrap">
       <div className="chat-scroll" ref={scroller} onScroll={onScroll} onCopy={handleMdCopy}>
+        {earlier}
+        {footerAt === -2 && footer}
         {visible.map((item, n) => (
           <Item
             key={n}
@@ -984,7 +1009,8 @@ export function LiveConversation({
             // The Task card links to the tab whose messages it owns.
             taskIdFor={item.kind === "tool" ? (taskIdByToolUse.get(item.id) ?? null) : null}
           />
-        ))}
+        )).flatMap((el, n) => (n === footerAt ? [el, <Fragment key="footer">{footer}</Fragment>] : [el]))}
+        {footerAt === -1 && footer}
         {openTask && (
           <div className="agent-report">
             <div className="agent-report-head">
@@ -1204,7 +1230,7 @@ export function LiveConversation({
                 : suggestion
                   ? `${suggestion}  (⇥ to use)`
                   : busy
-                    ? "Message Claude…  (↵ queues it for after this turn, esc stops)"
+                    ? "Message Claude…  (↵ queues it for after this turn, ■ stops)"
                     : "Message Claude…  (↵ to send, ⇧↵ for a new line, ↑ for the last one)"
             }
             disabled={ended}
@@ -1229,26 +1255,14 @@ export function LiveConversation({
             onFocus={syncCaret}
             onKeyDown={(e) => {
               /**
-               * Escape has three jobs here, in this order: close the picker, stop a
-               * running turn, then — only if neither applied — fall through to the
-               * drawer's own listener and close the session. Interrupting is the one
-               * you want mid-turn, and it used to be a button you had to aim at.
+               * Escape closes the picker if it is open; otherwise it falls through to the
+               * drawer's own listener and closes the window. It never stops a running
+               * turn (you asked for that): stopping is the ■ button.
                */
               if (e.key === "Escape") {
                 if (menuLen > 0) {
                   e.stopPropagation();
                   setDismissed(tokenId);
-                  return;
-                }
-                if (busy) {
-                  e.stopPropagation();
-                  e.preventDefault();
-                  setNote("Stopping…");
-                  void agentApi
-                    .interrupt(agentKey)
-                    .then(() => setNote("Stopped."))
-                    .catch((err: Error) => setNote(err.message));
-                  return;
                 }
                 return;
               }
@@ -1501,6 +1515,7 @@ const Item = memo(function Item({
       );
 
     case "tool":
+      if (isDraftCall(item)) return <DraftCard item={item as Extract<TimelineItem, { kind: "tool" }>} />;
       return (
         <LazyDetails
           className={`tool ${item.ok === false ? "failed" : ""}`}
@@ -1571,9 +1586,53 @@ const Item = memo(function Item({
     }
 
     case "error":
-      return <div className="chat-error">{item.text}</div>;
+      return (
+        <div className="chat-error">
+          {item.text}
+          {item.connect?.length ? <ConnectorSignIn names={item.connect} /> : null}
+        </div>
+      );
   }
 });
+
+/**
+ * Sign a connector in again for Claude Code (`claude mcp login`), from the chat that
+ * found it without tools. The browser opens; the button follows the run.
+ */
+function ConnectorSignIn({ names }: { names: string[] }) {
+  const [state, setState] = useState<Record<string, "idle" | "waiting" | "ok" | string>>({});
+  const start = async (name: string) => {
+    setState((s) => ({ ...s, [name]: "waiting" }));
+    const r = await mcpApi.login(name).catch((e: Error) => ({ ok: false, error: e.message, logins: [] }));
+    if (!r.ok) return setState((s) => ({ ...s, [name]: r.error ?? "Could not start the sign-in." }));
+    const poll = setInterval(async () => {
+      const l = (await mcpApi.list().catch(() => null))?.logins?.find((x: { name: string }) => x.name === name) as { done: boolean; ok: boolean; error: string | null } | undefined;
+      if (!l || !l.done) return;
+      clearInterval(poll);
+      setState((s) => ({ ...s, [name]: l.ok ? "ok" : l.error ?? "The sign-in did not finish." }));
+    }, 2000);
+  };
+  return (
+    <div className="chat-connect">
+      {names.map((name) => {
+        const st = state[name] ?? "idle";
+        const label = name.replace(/^claude\.ai /, "");
+        return (
+          <span key={name} className="chat-connect-row">
+            {st === "ok" ? (
+              <span>✓ {label} signed in. Start the chat again (Resume, or the ticket's Chat).</span>
+            ) : (
+              <button className="icon-btn" disabled={st === "waiting"} onClick={() => void start(name)}>
+                {st === "waiting" ? "Finish in your browser…" : `Sign in to ${label}`}
+              </button>
+            )}
+            {st !== "idle" && st !== "waiting" && st !== "ok" && <span className="ba-muted"> {st}</span>}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
 
 /**
  * The turn's answer, for a session started with an output schema.
@@ -1661,6 +1720,42 @@ function WorkingLine({
   );
 }
 
+/** A Front draft Claude created: kept visible even when tool calls are hidden. */
+function isDraftCall(i: TimelineItem): boolean {
+  return i.kind === "tool" && /Front__(create|update)_draft$/.test(i.name) && i.ok !== false && i.result !== undefined;
+}
+
+function DraftCard({ item }: { item: Extract<TimelineItem, { kind: "tool" }> }) {
+  const input = (item.input ?? {}) as { conversationId?: string; body?: string };
+  const cnv = input.conversationId ?? String(item.result ?? "").match(/cnv_[A-Za-z0-9]+/)?.[0] ?? null;
+  const preview = String(input.body ?? "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 160);
+  return <DraftLink cnv={cnv} preview={preview} update={/update_draft$/.test(item.name)} />;
+}
+
+/** "Draft created in Front", with a button that opens it in the Inbox's Drafts folder. */
+export function DraftLink({ cnv, preview, update }: { cnv: string | null; preview: string; update?: boolean }) {
+  const open = () => {
+    try {
+      sessionStorage.setItem("inbox-open", JSON.stringify({ view: "drafts", id: cnv }));
+    } catch {
+      /* storage blocked: the Inbox still opens */
+    }
+    window.location.hash = "#/inbox";
+    window.dispatchEvent(new Event("inbox-open"));
+  };
+  return (
+    <div className="draft-card">
+      <span className="draft-card-tag">{update ? "Draft updated in Front" : "Draft created in Front"}</span>
+      {preview && <span className="draft-card-text">{preview}…</span>}
+      {cnv && (
+        <button className="icon-btn" onClick={open}>
+          Open draft in Inbox
+        </button>
+      )}
+    </div>
+  );
+}
+
 /** The shape AskUserQuestion puts in its input; only what the UI needs to render. */
 type AskQuestion = {
   question: string;
@@ -1669,7 +1764,7 @@ type AskQuestion = {
   options: { label: string; description?: string }[];
 };
 
-function askQuestions(input: unknown): AskQuestion[] | null {
+export function askQuestions(input: unknown): AskQuestion[] | null {
   if (!input || typeof input !== "object") return null;
   const qs = (input as { questions?: unknown }).questions;
   if (!Array.isArray(qs) || qs.length === 0) return null;
@@ -1691,7 +1786,7 @@ function askQuestions(input: unknown): AskQuestion[] | null {
  * "Other" is offered on every question because the tool's own description promises
  * it, and a free-text answer is often the real one.
  */
-function AskQuestions({
+export function AskQuestions({
   questions,
   busy,
   onSubmit,

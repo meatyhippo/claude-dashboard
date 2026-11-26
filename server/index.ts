@@ -1,4 +1,7 @@
 import { watch } from "node:fs";
+import { agentConnectors } from "./agents.ts";
+import { cancelClaudeLogin, claudeAuthStatus, claudeLoginState, claudeLogout, startClaudeLogin, submitClaudeCode } from "./claudeAuth.ts";
+import { sessionDrafts } from "./sessionDrafts.ts";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, normalize } from "node:path";
@@ -282,6 +285,8 @@ import { sessionReceipt, usageSummary } from "./usage.ts";
 import { applyBaEditionOnce, getBaFlags } from "./baEdition.ts";
 import { dropConnectorCalendar, withConnectorStatus } from "./baCalendar.ts";
 import { handleBaRoute, initBaCustomers } from "./baCustomers.ts";
+import { initWb, wbOnRoster, wbScanAwaiting } from "./wb.ts";
+import { getBaFlags as wbFlags } from "./baEdition.ts";
 
 const cfg = loadConfig();
 const settings = loadSettings();
@@ -385,6 +390,12 @@ applyArtifactsRoot(settings.ui.artifactsRoot);
 }
 initDrawings(db);
 initBaCustomers(db);
+initWb(db);
+// Workbench: every hour, check Front for replies on tickets that wait on the customer.
+setInterval(() => {
+  const f = wbFlags();
+  if (f.enabled && f.workbench) void wbScanAwaiting().catch(() => {});
+}, 3_600_000);
 initNotes(db);
 setNotesDir(settings.ui.notesRoot ?? "");
 reconcileNotes();
@@ -427,6 +438,7 @@ setAgentEmitter((event, data) => {
     const roster = data as ReturnType<typeof rosterPayload>;
     runsOnRoster(roster.agents);
     explainOnRoster(roster.agents);
+    wbOnRoster(roster.agents);
     syncWorkspacesNow();
   }
   if (event === "agent-item") {
@@ -936,6 +948,7 @@ function sessionDetail(id: string) {
     // Null for a session with no priced events yet, which the UI reads as "nothing
     // to bill" rather than as zero.
     receipt: sessionReceipt(db, cfg, id),
+    drafts: sessionDrafts(id),
   };
 }
 
@@ -1965,6 +1978,7 @@ const server = Bun.serve<PtyData, never>({
 
     if (p.startsWith("/api/agents/")) {
       const [key, action] = p.slice("/api/agents/".length).split("/");
+      if (action === "connectors" && key) return json({ connectors: await agentConnectors(key) });
       if (!key) return json({ error: "not found" }, 404);
 
       if (!action && req.method === "GET") {
@@ -2687,6 +2701,18 @@ const server = Bun.serve<PtyData, never>({
      * configured server and can take minutes when the CLI is cold, so it is started
      * by its own endpoint and watched through `checking` rather than awaited here.
      */
+    // Claude sign-in, from the page (first run, or Settings).
+    if (p === "/api/claude-auth" && req.method === "GET") return json({ status: await claudeAuthStatus(), login: claudeLoginState() });
+    if (p === "/api/claude-auth/login" && req.method === "POST") {
+      const b = (await req.json().catch(() => ({}))) as { email?: string; sso?: boolean; code?: string; cancel?: boolean };
+      if (b.cancel) {
+        cancelClaudeLogin();
+        return json({ login: null });
+      }
+      const login = b.code ? await submitClaudeCode(b.code) : await startClaudeLogin({ email: b.email, sso: b.sso });
+      return json({ login, status: login.done ? await claudeAuthStatus() : null });
+    }
+    if (p === "/api/claude-auth/logout" && req.method === "POST") return json({ status: await claudeLogout() });
     if (p === "/api/mcp" && req.method === "GET") {
       return json({ ...cachedMcp(), checking: isCheckingMcp(), logins: mcpLogins() });
     }

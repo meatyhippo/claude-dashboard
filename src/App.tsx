@@ -107,6 +107,7 @@ import { DrawingsView } from "./components/DrawingsView.tsx";
 import InboxView from "./components/InboxView.tsx";
 import FeedbackMode from "./components/FeedbackMode.tsx";
 import DeliveryView from "./components/DeliveryView.tsx";
+import WorkbenchView from "./components/WorkbenchView.tsx";
 import QaiView from "./components/QaiPanel.tsx";
 import { DRAWINGS_CHANGED } from "./components/drawingEvents.ts";
 import { isDrawingKey } from "../shared/drawings.ts";
@@ -160,6 +161,7 @@ const TAB_ICON: Record<Exclude<Tab, "desktop">, () => JSX.Element> = {
   live: HomeIcon,
   inbox: InboxIcon,
   delivery: PulseIcon,
+  workbench: PulseIcon,
   qai: CommentIcon,
   tasks: TasksIcon,
   calendar: CalendarIcon,
@@ -199,7 +201,7 @@ const TAB_ROUTES: Record<string, Tab> = {
   "#/tasks": "tasks",
   "#/calendar": "calendar",
   // BA edition: its pages get a link of their own only while their switch is on.
-  ...(Object.fromEntries((["inbox", "delivery", "qai", "projects", "artifacts", "desktop"] as const).filter((k) => baFlags.enabled && baPageOn(k)).map((k) => [`#/${k}`, k])) as Record<string, Tab>),
+  ...(Object.fromEntries((["inbox", "delivery", "workbench", "qai", "projects", "artifacts", "desktop"] as const).filter((k) => baFlags.enabled && baPageOn(k)).map((k) => [`#/${k}`, k])) as Record<string, Tab>),
 };
 /** #/calendar/<epoch ms>: the calendar, on the week that moment falls in. */
 const CALENDAR_AT = /^#\/calendar\/(\d+)$/;
@@ -511,7 +513,13 @@ export default function App() {
     };
     if (TAB_ROUTES[window.location.hash] || CALENDAR_AT.test(window.location.hash)) onHash();
     window.addEventListener("hashchange", onHash);
-    return () => window.removeEventListener("hashchange", onHash);
+    // "Open draft in Inbox" from a chat in the drawer: show the Inbox, not the drawer on top of it.
+    const onInboxOpen = () => setOpenId(null);
+    window.addEventListener("inbox-open", onInboxOpen);
+    return () => {
+      window.removeEventListener("hashchange", onHash);
+      window.removeEventListener("inbox-open", onInboxOpen);
+    };
   }, []);
 
   useEffect(() => applyAppearance(appearance), [appearance]);
@@ -1108,6 +1116,13 @@ export default function App() {
       ...buildSessions({ agents, live, titles, seen: sidebarSeen, visible: onScreen }),
       ...restorable
         .filter((r) => !agents.some((a) => a.sessionId === r.sessionId))
+        // A Workbench ticket has one chat: of its paused sessions only the newest is offered,
+        // and none while the ticket already has a live one.
+        .filter((r, _i, all) => {
+          if (!/\/\.claude-dashboard\/wb\/[0-9a-f]+\/?$/.test(r.cwd)) return true;
+          if (agents.some((a) => a.cwd === r.cwd && a.status !== "ended" && a.status !== "error")) return false;
+          return !all.some((o) => o.cwd === r.cwd && o.sessionId !== r.sessionId && (o.lastSeen ?? 0) > (r.lastSeen ?? 0));
+        })
         .map((r) => ({
           id: r.sessionId,
           ids: [r.sessionId],
@@ -1115,7 +1130,7 @@ export default function App() {
           title: r.title ?? titles.get(r.sessionId)?.title ?? r.cwd.split("/").filter(Boolean).pop() ?? "Session",
           cwd: r.cwd,
           status: "ended" as const,
-          why: "Ended when the dashboard restarted",
+          why: "Paused when the dashboard restarted",
           pending: 0,
           at: r.lastSeen,
           since: r.lastSeen,
@@ -1529,7 +1544,7 @@ export default function App() {
         />
       )}
 
-      {!onFullPage && usage && tab !== "live" && tab !== "worktrees" && tab !== "settings" && tab !== "desktop" && tab !== "reviews" && tab !== "artifacts" && tab !== "drawings" && tab !== "notes" && tab !== "projects" && tab !== "services" && tab !== "templates" && tab !== "tasks" && tab !== "calendar" && tab !== "history" && tab !== "inbox" && tab !== "delivery" && tab !== "qai" && (
+      {!onFullPage && usage && tab !== "live" && tab !== "worktrees" && tab !== "settings" && tab !== "desktop" && tab !== "reviews" && tab !== "artifacts" && tab !== "drawings" && tab !== "notes" && tab !== "projects" && tab !== "services" && tab !== "templates" && tab !== "tasks" && tab !== "calendar" && tab !== "history" && tab !== "inbox" && tab !== "delivery" && tab !== "workbench" && tab !== "qai" && (
         <div className="kpis">
           {/* Tokens here are fresh tokens: cache reads are excluded and shown
               separately, since they are ~97% of raw volume at a tenth the rate. */}
@@ -1679,6 +1694,7 @@ export default function App() {
       {baFlags.feedback && <FeedbackMode />}
       {!onFullPage && tab === "inbox" && baFlags.inbox && <InboxView onOpen={(key) => openSession(key, { drawer: true })} />}
       {!onFullPage && tab === "delivery" && baFlags.delivery && <DeliveryView onOpen={(key) => openSession(key, { drawer: true })} />}
+      {!onFullPage && tab === "workbench" && baFlags.workbench && <WorkbenchView onOpen={(key) => openSession(key, { drawer: true })} />}
       {!onFullPage && tab === "qai" && baFlags.qai && <QaiView />}
       {!onFullPage && tab === "drawings" && <DrawingsView projects={workspaces?.projects ?? NO_PROJECT_LIST} onOpen={openSession} />}
       {!onFullPage && tab === "worktrees" && (

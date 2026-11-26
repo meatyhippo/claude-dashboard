@@ -26,6 +26,7 @@ import { Select } from "./Select.tsx";
 import { MODES, MODE_HELP, MODE_LABEL } from "./Conversation.tsx";
 import { permissionModeOr } from "../../shared/templates.ts";
 import { ReviewsSettings } from "./pr/ReviewsSettings.tsx";
+import { ClaudeAccountLine } from "./ClaudeSignIn.tsx";
 
 function labelFromModelId(id: string): string {
   const m = id.match(/^claude-([a-z]+)-(.+)$/);
@@ -159,6 +160,13 @@ export function SettingsView({
     <div className="settings-layout">
       {nav}
       <div className="settings-body">
+        {section === "appearance" && (
+          <div className="panel">
+            <h2>Claude account</h2>
+            <p className="hint">The sessions run as this Claude account.</p>
+            <ClaudeAccountLine />
+          </div>
+        )}
         {section === "appearance" && (
           <div className="panel">
             <h2>Name</h2>

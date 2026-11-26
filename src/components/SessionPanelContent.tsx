@@ -1,3 +1,4 @@
+import { WbChatNext, WbDrawerLinks, WbDrawerTitle, WbSessionSteps, wbTicketIdOf } from "./WorkbenchView.tsx";
 import SessionContextPane, { useScxPos } from "./SessionContextPane.tsx";
 import { baFlags } from "../baFlags.ts";
 import DataShaperPanel from "./DataShaperPanel.tsx";
@@ -24,7 +25,7 @@ import {
 import { SessionArtifacts } from "./ArtifactsView.tsx";
 import { HBars } from "./Charts.tsx";
 import { Receipt } from "./Receipt.tsx";
-import { LiveConversation } from "./Conversation.tsx";
+import { DraftLink, LiveConversation } from "./Conversation.tsx";
 import { EditableTitle } from "./EditableTitle.tsx";
 import { GitBadge } from "./GitPanel.tsx";
 import { PrBackLink } from "./pr/PrBackLink.tsx";
@@ -176,7 +177,9 @@ function SessionPanelBody({
           of line with the buttons instead of staying level with them. */}
       <div className="drawer-head" onPointerDown={onHeadPointerDown}>
         {headStart}
-        {titleEditable ? (
+        {baFlags.workbench && wbTicketIdOf(cwd) ? (
+          <WbDrawerTitle cwd={cwd} title={title} />
+        ) : titleEditable ? (
           <EditableTitle as="h3" value={title} onRename={renameTo} />
         ) : (
           <h3 className="session-title">
@@ -185,6 +188,7 @@ function SessionPanelBody({
           </h3>
         )}
         <div className="drawer-actions">
+          {baFlags.workbench && wbTicketIdOf(cwd) && <WbDrawerLinks cwd={cwd} />}
           {/* Open full page, Notify, Restart and Stop used to sit here as four
               controls, which in a tile left no room for the title they were
               pushing around. They are each wanted rarely and never together, so
@@ -213,14 +217,22 @@ function SessionPanelBody({
 
       {agent ? (
         <>
-          {agent.turns === 0 && data && turnsOf(data).length > 0 && (
-            <p className="takeover-note">Earlier turns from before the dashboard took over are on the full page.</p>
-          )}
-          {baFlags.customers ? (
-            // BA edition: the pane beside the chat, left, right or above it as set in its header.
-            <div className={`scx-host ctx-${scxPos}`}>
-              <SessionContextPane sessionId={id} agentKey={agent.key} cwd={cwd} />
-              <div className="scx-chat">
+          {(() => {
+            // Turns from before the dashboard took over (e.g. before a restart), cut at
+            // the adoption time so they never double-print with the live timeline.
+            const prior = data ? turnsOf(data).filter((t) => (t.ts ?? 0) < agent.createdAt) : [];
+            const earlier = prior.length > 0 && (
+              <details className="chat-earlier" open>
+                <summary>Earlier conversation ({prior.length} turns)</summary>
+                <Transcript
+                  turns={prior}
+                  inserts={(data?.drafts ?? []).filter((d) => (d.ts ?? 0) < agent.createdAt).map((d) => ({ ts: d.ts, node: <DraftLink cnv={d.conversationId} preview={d.preview} update={d.update} /> }))}
+                />
+              </details>
+            );
+            const wbTicket = baFlags.workbench && !!wbTicketIdOf(cwd);
+            const chat = (
+              <>
                 {baFlags.qargoMcp && <DataShaperPanel sessionId={id} agentKey={agent.key} live compact />}
                 <LiveConversation
                   agentKey={agent.key}
@@ -228,21 +240,29 @@ function SessionPanelBody({
                   onSettings={onSettings}
                   onGone={onClose}
                   scrollJumpVariant={jumpVariant === "compact" ? "compact" : "float"}
+                  earlier={earlier}
+                  footer={wbTicket ? <WbChatNext cwd={cwd} /> : undefined}
                 />
-              </div>
-            </div>
-          ) : (
-            <>
-              {baFlags.qargoMcp && <DataShaperPanel sessionId={id} agentKey={agent.key} live compact />}
-              <LiveConversation
-                agentKey={agent.key}
-                settings={settings}
-                onSettings={onSettings}
-                onGone={onClose}
-                scrollJumpVariant={jumpVariant === "compact" ? "compact" : "float"}
-              />
-            </>
-          )}
+              </>
+            );
+            // Workbench ticket: the chat on the left, its steps top to bottom on the right.
+            if (wbTicket)
+              return (
+                <div className="wbt-split">
+                  <div className="wbt-split-chat">{chat}</div>
+                  <WbSessionSteps cwd={cwd} />
+                </div>
+              );
+            // BA edition: the pane beside the chat, left, right or above it as set in its header.
+            if (baFlags.customers)
+              return (
+                <div className={`scx-host ctx-${scxPos}`}>
+                  <SessionContextPane sessionId={id} agentKey={agent.key} cwd={cwd} />
+                  <div className="scx-chat">{chat}</div>
+                </div>
+              );
+            return chat;
+          })()}
         </>
       ) : (
         <>

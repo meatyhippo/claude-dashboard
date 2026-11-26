@@ -78,6 +78,8 @@ export type BaFrontThread = {
   snippet: string | null;
   updatedAt: number | null;
   link: string;
+  /** In the Drafts view: your unsent Front draft on this conversation. */
+  draft?: { id: string; preview: string } | null;
   /** Who wrote the last message: "us" (replied, waiting on them) or "them" (needs a reply). Known once the timeline is read. */
   lastBy?: "us" | "them" | null;
 };
@@ -308,6 +310,8 @@ export type BaFlags = {
   inbox: boolean;
   /** The Delivery page for IDMs: meetings, scoping window, billable pipeline, go-live, change requests. */
   delivery: boolean;
+  /** The Workbench page: your engineering tickets with setup steps, Start and the morning digest. */
+  workbench: boolean;
   /** The Qai page and Qai boxes on customers and IRs (#ps_troubleshooting). */
   qai: boolean;
   /** Qargo Excalidraw styleguide: landscape template, library, style check, customer export. */
@@ -320,22 +324,26 @@ export type BaFlags = {
   calendar: boolean;
   /** BA session buttons start a cloud session (claude.ai/code) in a terminal instead of a session on this Mac. */
   cloudSessions: boolean;
+  /** Experimental: Notion / Front / Slack reads go straight to the claude.ai connector, without a Claude session. */
+  directConnectors: boolean;
   /** Send a session to a colleague over Slack, and import one they sent. */
   handoff: boolean;
 };
 
-export const DEFAULT_BA_FLAGS: BaFlags = { enabled: false, feedback: false, customers: true, inbox: true, delivery: true, qai: true, diagrams: true, published: true, qargoMcp: true, calendar: true, cloudSessions: false, handoff: true };
+export const DEFAULT_BA_FLAGS: BaFlags = { enabled: false, feedback: false, customers: true, inbox: true, delivery: true, workbench: true, qai: true, diagrams: true, published: true, qargoMcp: true, calendar: true, cloudSessions: false, directConnectors: false, handoff: true };
 
 export const BA_FLAG_INFO: { key: Exclude<keyof BaFlags, "enabled">; label: string; hint: string }[] = [
   { key: "customers", label: "Customers from Notion", hint: "Projects become customers: My deals, Requirements and Front tabs, IR workspaces" },
   { key: "inbox", label: "Inbox triage", hint: "Front conversations placed at customers and IRs from Notion" },
   { key: "delivery", label: "Delivery (IDM)", hint: "Today's customer meetings, the 2-week scoping window, billable pipeline, go-live watch, change requests" },
+  { key: "workbench", label: "Workbench", hint: "Your engineering tickets (Scoping, Tasks, Change requests) with setup steps, Start per ticket and the morning digest" },
   { key: "qai", label: "Qai", hint: "Ask Qai in #ps_troubleshooting, from its own page, a customer or an IR" },
   { key: "calendar", label: "Calendar via Claude", hint: "Your Google Calendar through the claude.ai connector, on the Calendar page, Home and Delivery (read-only, no Google Cloud setup)" },
   { key: "cloudSessions", label: "Run BA sessions in the cloud", hint: "Session buttons start a claude.ai/code cloud session (in a terminal tile) that keeps running without this Mac. The cloud has your connectors, not this Mac's files" },
   { key: "qargoMcp", label: "Build on the Qargo MCP", hint: "Create integration / mapping / visibility from an IR (test tenant by default)" },
   { key: "diagrams", label: "Qargo diagrams", hint: "Excalidraw styleguide: landscape template, shape library, style check, customer export" },
   { key: "published", label: "Published artifacts", hint: "Your claude.ai artifacts beside the local ones and on customer pages" },
+  { key: "directConnectors", label: "Direct connector calls (experimental)", hint: "Notion, Front and Slack reads go straight to your claude.ai connectors with Claude Code's sign-in, without a Claude session: about 1 s instead of 3 to 20 s. Uses an undocumented connection that a Claude Code update can break; any failure falls back to the normal way" },
   { key: "handoff", label: "Session handoff", hint: "Send a session to a colleague in a Slack DM from its ⋮ menu; they import it from History and carry on" },
   { key: "feedback", label: "Feedback mode", hint: "A Feedback button that pins notes to any part of the page, saved for the next round of changes" },
 ];
@@ -360,7 +368,7 @@ export const isSlackNoise = (t: string) => /^\s*<@[^>]+>\s+has (joined|left) the
 
 // ── mailbox ──────────────────────────────────────────────────────────────────
 
-export type BaMailView = "inbox" | "mentions" | "following" | "placed";
+export type BaMailView = "inbox" | "assigned" | "subscribed" | "mentions" | "drafts" | "placed";
 
 export type BaMailEntry = {
   kind: "message" | "comment" | "activity";

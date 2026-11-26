@@ -315,7 +315,7 @@ export function Palette({
         state: STATE_OF[s.status],
         boost: waiting && !s.resumable ? 60 : s.resumable || s.status === "ended" ? 5 : 40,
         canFull: !s.resumable,
-        run: (opts) => (s.resumable ? void agentApi.restore(s.id).catch(() => {}) : onOpenSession(s.id, opts)),
+        run: (opts) => (s.resumable ? void agentApi.restore(s.id).then(() => onOpenSession(s.id, opts)).catch(() => {}) : onOpenSession(s.id, opts)),
       });
     }
 

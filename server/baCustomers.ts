@@ -1,4 +1,6 @@
+import { cleanSnippet } from "./baMail.ts";
 import type { Database } from "bun:sqlite";
+import { handleWbRoute } from "./wb.ts";
 import {
   domainOf,
   domainsIn,
@@ -33,7 +35,7 @@ import { getBaFlags, getBaModels, getMailStyle, mailStyleBlock, setBaFlags, setB
 import { agenda } from "./baCalendar.ts";
 import { attachmentError, initAttachments, saveAttachments, savedFor } from "./baAttachments.ts";
 import { chooseFolderNative, createEntry, openFolder } from "./baFiles.ts";
-import { keyPoints, mailView, readThread, reply, suggestReply, threadAsText, warmMail } from "./baMail.ts";
+import { keyPoints, mailView, readDraft, readThread, reply, suggestReply, threadAsText, warmMail } from "./baMail.ts";
 import { handleFeedbackRoute } from "./baFeedback.ts";
 import { handlePublishedRoute } from "./baPublished.ts";
 import { askQai, composeQai, initQai, listQai, parseThread, qaiReplies, qaiToday } from "./baQai.ts";
@@ -597,7 +599,7 @@ export function frontThreads(raw: string): BaFrontThread[] {
       emails: [...new Set(JSON.stringify(c).match(EMAIL_RE) ?? [])].slice(0, 20),
       assignee: str(c.assigneeName, c.assigneeAlias, c.assignee?.email, c.assignee?.username),
       tags: Array.isArray(c.tags) ? c.tags.map((t: any) => (typeof t === "string" ? t : t?.name)).filter(Boolean) : [],
-      snippet: str(last.blurb, c.blurb, last.text?.slice?.(0, 200)),
+      snippet: cleanSnippet(str(last.blurb, c.blurb, last.text?.slice?.(0, 2000))),
       updatedAt: time(c.updatedAt ?? c.waiting_since ?? last.created_at ?? c.updated_at ?? c.created_at),
       link: str(c.links?.app, c._links?.app) ?? `https://app.frontapp.com/open/${c.id}`,
     };
@@ -1044,8 +1046,10 @@ function qaiContext(projectId: number | null, irUrl: string | null): string[] {
   const lines: string[] = [];
   if (c) {
     lines.push(`Customer: ${c.name}`);
-    const prod = [...new Set(c.deals.flatMap((d) => (d.productionUrls ?? "").split(/[\s,]+/)).filter((u) => u.startsWith("http")))];
-    const sandbox = [...new Set(c.deals.flatMap((d) => (d.sandboxUrls ?? "").split(/[\s,]+/)).filter((u) => u.startsWith("http")))];
+    // Deals hold tenant names ("fsew-sandbox") or links; Qai needs the full link to act.
+    const links = (v: string | null | undefined) => (v ?? "").split(/[\s,]+/).map((u) => u.trim()).filter((u) => /^https?:\/\//.test(u) || /^[a-z0-9][a-z0-9-]*$/i.test(u)).map((u) => (u.startsWith("http") ? u : `https://app.qargo.com/${u}`));
+    const prod = [...new Set(c.deals.flatMap((d) => links(d.productionUrls)))];
+    const sandbox = [...new Set(c.deals.flatMap((d) => links(d.sandboxUrls)))];
     if (prod.length) lines.push(`Production: ${prod.slice(0, 3).join(" ")}`);
     if (sandbox.length) lines.push(`Sandbox: ${sandbox.slice(0, 3).join(" ")}`);
   }
@@ -1078,13 +1082,19 @@ export async function handleBaRoute(req: Request, url: URL): Promise<Response | 
     if (published) return published;
     const feedback = await handleFeedbackRoute(req, url);
     if (feedback) return feedback;
+    if (getBaFlags().workbench) {
+      const wb = await handleWbRoute(req, url);
+      if (wb) return wb;
+    }
 
     if (p === "/api/ba/agenda") return json(await agenda(Number(url.searchParams.get("days") ?? 2), refresh, listCustomers()));
     if (p === "/api/ba/mail") {
       const view = (url.searchParams.get("view") ?? "inbox") as import("../shared/baCustomers.ts").BaMailView;
-      if (!["inbox", "mentions", "following", "placed"].includes(view)) return json({ error: "unknown view" }, 400);
+      if (!["inbox", "assigned", "subscribed", "mentions", "drafts", "placed"].includes(view)) return json({ error: "unknown view" }, 400);
       return json(await mailView(view, refresh));
     }
+    const draftId = p.match(/^\/api\/ba\/mail\/draft\/(msg_[A-Za-z0-9]+)$/);
+    if (draftId) return json(await readDraft(draftId[1]!));
     const threadId = p.match(/^\/api\/ba\/mail\/thread\/(cnv_[A-Za-z0-9]+)(\/reply)?$/);
     if (threadId) {
       if (threadId[2] && req.method === "POST") {
