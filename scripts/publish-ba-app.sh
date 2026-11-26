@@ -2,7 +2,7 @@
 # Build the BA edition's Mac app and publish it on the rolling `ba-app` release
 # that get.sh downloads, together with get.sh itself.
 #
-#   ./scripts/publish-ba-app.sh                     build, then publish to origin's repository
+#   ./scripts/publish-ba-app.sh                     build, then publish to the repository get.sh installs from
 #   ./scripts/publish-ba-app.sh --repo owner/name   publish somewhere else (a fork, to test)
 #   ./scripts/publish-ba-app.sh --build-only        build into build/ba-app, publish nothing
 #   ./scripts/publish-ba-app.sh --no-build          publish what is in build/ba-app
@@ -70,7 +70,10 @@ fi
 # ── publish ───────────────────────────────────────────────────────────────────
 have gh || { bad "the gh CLI is required"; hint "https://cli.github.com"; exit 1; }
 gh auth status >/dev/null 2>&1 || { bad "gh is not logged in"; hint "gh auth login"; exit 1; }
-[ -n "$REPO" ] || REPO="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
+# By default the repository get.sh installs from, so the two cannot drift apart
+# (gh's own guess follows the remotes, and can land on the upstream repository).
+[ -n "$REPO" ] || REPO="$(sed -nE 's/^REPO="\$\{CLAUDE_DASHBOARD_REPO:-([^}]+)\}"$/\1/p' get.sh | head -1)"
+[ -n "$REPO" ] || { bad "could not read the repository from get.sh; pass --repo owner/name"; exit 1; }
 
 BUILD="$(head -1 "$OUT/build.txt" 2>/dev/null || true)"
 SHA="$(head -1 "$OUT/commit.txt" 2>/dev/null || true)"
