@@ -1,3 +1,4 @@
+import { QargoMcpBanner } from "./QargoMcpBanner.tsx";
 import { Fragment, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ClaudeMark } from "./Icons.tsx";
 import type { Cached } from "../../shared/baCustomers.ts";
@@ -385,7 +386,7 @@ function Detail({ r, act, run, inChat }: { r: WbRow; act: (p: Promise<unknown>) 
             Let Claude generate steps
           </button>
         )}
-        <button className="icon-btn ghost" disabled={busy} title="Claude reads the ticket, Front and the tenant, updates the steps and says where it stands" onClick={() => run("status", true)}>
+        <button className="icon-btn ghost" disabled={busy} title="Claude reads the ticket, Front and the tenant, updates the steps and says where it stands" onClick={() => run("status")}>
           Get current status
         </button>
         {!inChat && (
@@ -903,6 +904,7 @@ export default function WorkbenchView({ onOpen }: { onOpen: (key: string) => voi
 
   return (
     <div className="page ba-inbox wb">
+      <QargoMcpBanner />
       <div className="ba-panel-head">
         <h2>Workbench</h2>
         <span className="ba-muted">

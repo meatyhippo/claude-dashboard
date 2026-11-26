@@ -10726,3 +10726,9 @@ a.front-btn:not(.icon-btn) { display: inline-block; padding: 1px 7px; text-decor
 .cloud-panel-grip:hover { background: color-mix(in oklab, var(--accent) 40%, transparent); }
 /* The webview would swallow the pointer mid-drag. */
 .cloud-dragging .cloud-panel-view { pointer-events: none; }
+
+/* BA edition: Qargo MCP sign-in banner (Home, Workbench) */
+.mcp-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 14px; padding: 10px 14px; border: 1px solid var(--border-strong); border-left: 3px solid #00E85B; border-radius: 8px; background: var(--surface-1); font-size: 13px; color: var(--text-secondary); }
+.mcp-banner > span:first-child { flex: 1 1 320px; min-width: 0; }
+.mcp-banner strong { color: var(--text-primary); }
+.mcp-banner .chat-connect { margin-top: 0; }

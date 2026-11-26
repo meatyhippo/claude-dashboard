@@ -1599,7 +1599,7 @@ const Item = memo(function Item({
  * Sign a connector in again for Claude Code (`claude mcp login`), from the chat that
  * found it without tools. The browser opens; the button follows the run.
  */
-function ConnectorSignIn({ names }: { names: string[] }) {
+export function ConnectorSignIn({ names, okText, onSignedIn }: { names: string[]; okText?: string; onSignedIn?: (name: string) => void }) {
   const [state, setState] = useState<Record<string, "idle" | "waiting" | "ok" | string>>({});
   const start = async (name: string) => {
     setState((s) => ({ ...s, [name]: "waiting" }));
@@ -1610,6 +1610,7 @@ function ConnectorSignIn({ names }: { names: string[] }) {
       if (!l || !l.done) return;
       clearInterval(poll);
       setState((s) => ({ ...s, [name]: l.ok ? "ok" : l.error ?? "The sign-in did not finish." }));
+      if (l.ok) onSignedIn?.(name);
     }, 2000);
   };
   return (
@@ -1620,7 +1621,7 @@ function ConnectorSignIn({ names }: { names: string[] }) {
         return (
           <span key={name} className="chat-connect-row">
             {st === "ok" ? (
-              <span>✓ {label} signed in. Start the chat again (Resume, or the ticket's Chat).</span>
+              <span>✓ {label} signed in.{" "}{okText ?? "Start the chat again (Resume, or the ticket's Chat)."}</span>
             ) : (
               <button className="icon-btn" disabled={st === "waiting"} onClick={() => void start(name)}>
                 {st === "waiting" ? "Finish in your browser…" : `Sign in to ${label}`}
