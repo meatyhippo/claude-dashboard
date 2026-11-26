@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync,
 import { join, sep } from "node:path";
 import { claudeEnv, DATA_DIR } from "./paths.ts";
 import { scanCommands } from "./commands.ts";
+import { getBaFlags } from "./baEdition.ts";
 import {
   query,
   renameSession,
@@ -732,6 +733,20 @@ const RESEARCH_OPTIONS: Pick<Options, "settingSources" | "skills" | "disallowedT
 };
 
 /**
+ * BA edition: a research chat that keeps the org's skills. Same tool fence, but the
+ * skill catalogue stays (no `skills: []`), so the qargo / professional-services
+ * skills are offered and listed in the chat's / menu.
+ */
+const RESEARCH_WITH_SKILLS: Pick<Options, "settingSources" | "disallowedTools"> = {
+  settingSources: RESEARCH_OPTIONS.settingSources,
+  disallowedTools: RESEARCH_OPTIONS.disallowedTools,
+};
+const baChatSkills = () => {
+  const f = getBaFlags();
+  return f.enabled && f.chatSkills;
+};
+
+/**
  * The name a session already goes by. Resuming starts a new agent record, and the
  * CLI ignores `title` on resume, so without this a resume from a caller that does
  * not re-supply the name comes back nameless and the views fall back to its path.
@@ -781,12 +796,13 @@ export function startAgent(opts: StartOptions): string {
     q: null as unknown as Query,
   };
 
+  const researchWithSkills = opts.research === true && baChatSkills();
   agent.q = query({
     prompt: queue,
     options: {
       env: claudeEnv(),
       cwd: opts.cwd,
-      ...(opts.research ? RESEARCH_OPTIONS : {}),
+      ...(opts.research ? (researchWithSkills ? RESEARCH_WITH_SKILLS : RESEARCH_OPTIONS) : {}),
       model: opts.model,
       permissionMode: opts.permissionMode ?? "default",
       // The CLI refuses bypassPermissions unless it was allowed at spawn time, so
@@ -800,7 +816,8 @@ export function startAgent(opts: StartOptions): string {
       allowedTools: opts.allowedTools,
       mcpServers: opts.mcpServers,
       // Research sessions are deliberately bare; every other one gets the org's skills.
-      plugins: opts.research ? undefined : orgPlugins(),
+      // BA edition (flag chatSkills): a chat without a folder gets them as well.
+      plugins: opts.research && !researchWithSkills ? undefined : orgPlugins(),
       ...(opts.research ? {} : { systemPrompt: { type: "preset" as const, preset: "claude_code" as const, append: DRAFT_RULE } }),
       outputFormat: opts.outputSchema ? { type: "json_schema", schema: opts.outputSchema } : undefined,
       includePartialMessages: true,
