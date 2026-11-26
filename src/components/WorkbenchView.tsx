@@ -1,8 +1,8 @@
 import { QargoMcpBanner } from "./QargoMcpBanner.tsx";
 import { Fragment, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ClaudeMark } from "./Icons.tsx";
-import type { Cached } from "../../shared/baCustomers.ts";
-import { blockerOf, dateTone, stageOf, dueOf, held, neededForGoLive, toneRank, nextStep, prioRank, WB_AWAIT, WB_PHASES, WB_STATUS_OPTS, type WbDigest, type WbRow, type WbStage, type WbStep, type WbTab } from "../../shared/wb.ts";
+import type { BaFrontThread, Cached } from "../../shared/baCustomers.ts";
+import { blockerOf, dateTone, stageOf, dueOf, held, neededForGoLive, toneRank, nextStep, prioRank, WB_AWAIT, WB_PHASES, WB_STATUS_OPTS, type WbDigest, type WbFrontCand, type WbLinkedThread, type WbRow, type WbStage, type WbStep, type WbTab } from "../../shared/wb.ts";
 import { agentApi, type WbViewAs, wbApi } from "../api.ts";
 import { Freshness } from "./CustomerPanels.tsx";
 import { AskQuestions, askQuestions } from "./Conversation.tsx";
@@ -74,9 +74,9 @@ function ContactCell({ r, onMenu }: { r: WbRow; onMenu: (e: React.MouseEvent, as
   if (!c) {
     // A Front Link that is a conversation or message is still being read; anything else
     // (an inbox view, nothing) has no thread to read: say so instead of a waiting "…".
-    const reading = /(cnv|msg)_[a-z0-9]+/i.test(r.front);
+    const reading = r.frontLinked ? r.frontLinked.some((x) => !x.at) || /msg_[a-z0-9]+/i.test(r.front) : /(cnv|msg)_[a-z0-9]+/i.test(r.front);
     return (
-      <td className="wb-contact ba-muted" onContextMenu={menu} title="Right-click to search the latest Front thread">
+      <td className="wb-contact ba-muted" onContextMenu={menu} title="Right-click to see, add or remove the Front threads on this ticket">
         {reading ? "…" : "No thread"}
         {!reading && !ask && <div className="wb-contact-hint">searched automatically</div>}
         {ask}
@@ -85,7 +85,7 @@ function ContactCell({ r, onMenu }: { r: WbRow; onMenu: (e: React.MouseEvent, as
   }
   const d = daysSince(c.at);
   return (
-    <td className={`wb-contact ${d >= 30 ? "old" : d >= 14 ? "stale" : ""}`} onContextMenu={menu} title={`${new Date(c.at).toLocaleString()} · ${c.inbound ? "from" : "by"} ${c.who}${c.threads.length > 1 ? ` · newest of ${c.threads.length} threads` : ""} · right-click to search the latest Front thread`}>
+    <td className={`wb-contact ${d >= 30 ? "old" : d >= 14 ? "stale" : ""}`} onContextMenu={menu} title={`${new Date(c.at).toLocaleString()} · ${c.inbound ? "from" : "by"} ${c.who}${c.threads.length > 1 ? ` · newest of ${c.threads.length} threads` : ""} · right-click to see, add or remove its Front threads`}>
       {sinceLabel(c.at)}
       <div className="ba-muted">{c.inbound ? "Customer" : "Us"}</div>
       {ask}
@@ -93,18 +93,27 @@ function ContactCell({ r, onMenu }: { r: WbRow; onMenu: (e: React.MouseEvent, as
   );
 }
 
-/** Every Front thread on the ticket with its last email, the most recent in bold. */
+/** Every Front thread on the ticket with its last email, the most recent in bold, and a way to change them. */
 function ContactThreads({ r }: { r: WbRow }) {
   const c = r.contact;
-  if (!c) return null;
+  const read = new Map((c?.threads ?? []).map((t) => [t.id, t]));
+  const all = r.frontLinked ?? c?.threads.map((t) => ({ id: t.id, subject: t.subject, link: t.link, at: t.at, fromNotion: false })) ?? [];
+  const manage = (e: React.MouseEvent) => window.dispatchEvent(new CustomEvent("wb-front-menu", { detail: { url: r.url, x: e.clientX, y: e.clientY } }));
   return (
     <div className="wb-threads">
-      <span className="ba-muted">Last contact</span>
-      {c.threads.map((t, i) => (
-        <a key={t.id} href={t.link} target="_blank" rel="noreferrer" className={i === 0 ? "newest" : ""}>
-          {localDay(t.at)} · {t.subject || "(no subject)"} <span className="ba-muted">({t.inbound ? "from" : "by"} {t.who}, {sinceLabel(t.at).toLowerCase()})</span>
-        </a>
-      ))}
+      <span className="ba-muted">
+        Front threads ({all.length}){" "}
+        <button className="wb-linkbtn" onClick={manage}>{all.length ? "Change" : "Add"}</button>
+      </span>
+      {all.map((t, i) => {
+        const m = read.get(t.id);
+        return (
+          <a key={t.id} href={t.link} target="_blank" rel="noreferrer" className={i === 0 && m ? "newest" : ""}>
+            {t.at ? localDay(t.at) : "not read yet"} · {t.subject || "(no subject)"}
+            {m && <span className="ba-muted"> ({m.inbound ? "from" : "by"} {m.who}, {sinceLabel(m.at).toLowerCase()})</span>}
+          </a>
+        );
+      })}
     </div>
   );
 }
@@ -831,6 +840,15 @@ export default function WorkbenchView({ onOpen }: { onOpen: (key: string) => voi
   });
   const [menu, setMenu] = useState<{ url: string; x: number; y: number } | null>(null);
   const [fmenu, setFmenu] = useState<{ url: string; x: number; y: number; ask?: WbRow["frontAsk"] } | null>(null);
+  useEffect(() => {
+    const open = (e: Event) => {
+      const d = (e as CustomEvent<{ url: string; x: number; y: number }>).detail;
+      setMenu(null);
+      setFmenu({ ...d, ask: rowsRef.current.find((x) => x.url === d.url)?.frontAsk ?? null });
+    };
+    window.addEventListener("wb-front-menu", open);
+    return () => window.removeEventListener("wb-front-menu", open);
+  }, []);
   const [stage, setStage] = useState<WbStage>((remember("wb-stage") as WbStage) || "current");
   const [q, setQ] = useState("");
   const [open, setOpen] = useState<string | null>(null);
@@ -875,6 +893,8 @@ export default function WorkbenchView({ onOpen }: { onOpen: (key: string) => voi
       .catch((e) => setError(String(e?.message ?? e)));
 
   const rows = state?.data ?? [];
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
   const counts = { scoping: 0, tasks: 0, cr: 0 } as Record<WbTab, number>;
   for (const r of rows) counts[r.tab]++;
   const inTab = rows.filter((r) => kinds.includes(r.tab));
@@ -1028,30 +1048,44 @@ export default function WorkbenchView({ onOpen }: { onOpen: (key: string) => voi
           )}
         </>
       )}
-      {fmenu && <FrontMenu key={fmenu.url} menu={fmenu} onClose={() => setFmenu(null)} onUsed={() => { setFmenu(null); act(Promise.resolve()); }} />}
+      {fmenu && <FrontMenu key={fmenu.url} menu={fmenu} linked={rows.find((x) => x.url === fmenu.url)?.frontLinked ?? []} onClose={() => setFmenu(null)} onSaved={(close = true) => { if (close) setFmenu(null); act(Promise.resolve()); }} />}
       {menu && <StateMenu menu={menu} cur={(() => { const r = rows.find((x) => x.url === menu.url); return r?.state && !r.state.auto ? r.state.k : ""; })()} onClose={() => setMenu(null)} onPick={(v) => { act(wbApi.state(menu.url, v || null)); setMenu(null); }} />}
     </div>
   );
 }
 
 /** Right-click on Last contact: search the customer's newest Front conversations and tie one to the ticket. */
-function FrontMenu({ menu, onClose, onUsed }: { menu: { url: string; x: number; y: number; ask?: WbRow["frontAsk"] }; onClose: () => void; onUsed: () => void }) {
+type FrontCand = WbFrontCand;
+/**
+ * The Front threads on a ticket, and newer ones to add: one list of checkboxes, the
+ * threads on the ticket first (ticked), then the background search's suggestions or a
+ * fresh search. Save applies every tick and untick at once. A link or id can be pasted.
+ */
+function FrontMenu({ menu, linked, onClose, onSaved }: { menu: { url: string; x: number; y: number; ask?: WbRow["frontAsk"] }; linked: WbLinkedThread[]; onClose: () => void; onSaved: (close?: boolean) => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const asked = !!menu.ask?.threads.length;
-  const [res, setRes] = useState<Awaited<ReturnType<typeof wbApi.frontSearch>> | null>(asked ? { threads: menu.ask!.threads, query: menu.ask!.query, projectId: null } : null);
-  const [busy, setBusy] = useState<"search" | string | null>(null);
+  const [res, setRes] = useState<{ threads: FrontCand[]; query: string } | null>(asked ? { threads: menu.ask!.threads, query: menu.ask!.query } : null);
+  const [busy, setBusy] = useState<"search" | "save" | "add" | "dismiss" | null>(null);
+  // Showing the background search's suggestions (until a fresh search replaces them).
+  const [fromAsk, setFromAsk] = useState(asked);
   const searching = useRef(false);
   searching.current = busy === "search";
   const [err, setErr] = useState<string | null>(null);
+  const [paste, setPaste] = useState("");
+  // A search runs on its own; only saving, adding or dismissing locks the list.
+  const locked = !!busy && busy !== "search";
+  const onIds = linked.map((x) => x.id).join(",");
+  const [ticked, setTicked] = useState<Set<string>>(() => new Set(linked.map((x) => x.id)));
+  // A thread added by hand shows up in `linked` after the reload: tick it too.
+  useEffect(() => setTicked((cur) => new Set([...cur, ...linked.map((x) => x.id)])), [onIds]);
   const [pos, setPos] = useState({ x: menu.x, y: menu.y });
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
     const { width, height } = el.getBoundingClientRect();
     setPos({ x: Math.max(4, Math.min(menu.x, window.innerWidth - width - 4)), y: Math.max(4, Math.min(menu.y, window.innerHeight - height - 4)) });
-  }, [menu.x, menu.y, res, busy]);
+  }, [menu.x, menu.y, res, busy, onIds]);
   useEffect(() => {
-    // While Front is being searched a stray click must not throw the search away.
     const down = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && !searching.current && onClose();
     const key = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     document.addEventListener("mousedown", down);
@@ -1066,58 +1100,90 @@ function FrontMenu({ menu, onClose, onUsed }: { menu: { url: string; x: number; 
     setErr(null);
     wbApi
       .frontSearch(menu.url)
-      .then((r) => (r.error ? setErr(r.error) : setRes(r)))
+      .then((r) => (r.error ? setErr(r.error) : (setRes(r), setFromAsk(false))))
       .catch((e) => setErr(String(e?.message ?? e)))
       .finally(() => setBusy(null));
   };
-  const use = (t: NonNullable<typeof res>["threads"][number]) => {
-    setBusy(t.id);
+  // Without suggestions, look in Front straight away (a direct read takes a second or two).
+  useEffect(() => {
+    if (!asked) search();
+  }, []);
+  const onSet = new Set(linked.map((x) => x.id));
+  const cands = (res?.threads ?? []).filter((t) => !onSet.has(t.id));
+  // About this ticket first; the rest of the customer's mail below, for when the subject says nothing.
+  const about = cands.filter((t) => (t.score ?? 2) >= 2 && !t.other);
+  const rest = cands.filter((t) => !about.includes(t));
+  const [showRest, setShowRest] = useState(false);
+  const toAdd = cands.filter((t) => ticked.has(t.id));
+  const toRemove = linked.filter((t) => !ticked.has(t.id));
+  const changes = toAdd.length + toRemove.length;
+  const flip = (id: string) => setTicked((cur) => { const n = new Set(cur); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const save = () => {
+    setBusy("save");
     setErr(null);
-    const { linked: _l, ...thread } = t;
     wbApi
-      .frontUse(menu.url, thread)
-      .then((r) => (r.ok ? onUsed() : setErr(r.error ?? "Could not tie the thread to the ticket.")))
+      .frontSet(menu.url, toAdd.map(({ linked: _l, ...t }) => t), toRemove.map((t) => t.id))
+      .then((r) => (r.ok ? onSaved() : setErr(r.error ?? "Could not save the threads.")))
       .catch((e) => setErr(String(e?.message ?? e)))
       .finally(() => setBusy(null));
   };
+  const add = () => {
+    if (!paste.trim()) return;
+    setBusy("add");
+    setErr(null);
+    wbApi
+      .frontAdd(menu.url, paste.trim())
+      .then((r) => (r.ok ? (setPaste(""), onSaved(false)) : setErr(r.error ?? "Could not add that thread.")))
+      .catch((e) => setErr(String(e?.message ?? e)))
+      .finally(() => setBusy(null));
+  };
+  const row = (id: string, link: string, at: number | null, subject: string, extra?: React.ReactNode) => (
+    <label key={id} className="wb-fmenu-row">
+      <input type="checkbox" checked={ticked.has(id)} disabled={locked} onChange={() => flip(id)} />
+      <span className="wb-fmenu-main">
+        <span className="wb-fmenu-date">{at ? `${localDay(at)} · ${sinceLabel(at).toLowerCase()}` : "not read yet"}</span>
+        <span className="wb-fmenu-subj">{subject || "(no subject)"}</span>
+        {extra}
+      </span>
+      <a href={link} target="_blank" rel="noreferrer" title="Open in Front" onClick={(e) => e.stopPropagation()}>↗</a>
+    </label>
+  );
   return (
-    <div className={`wb-ctx ${res ? "wb-fmenu" : ""}`} ref={ref} role="menu" style={{ left: pos.x, top: pos.y }} onContextMenu={(e) => e.preventDefault()}>
-      {!res && (
-        <button role="menuitem" disabled={busy === "search"} onClick={search}>
-          <span className="wb-ctx-ck" />
-          {busy === "search" ? "Searching Front… (about 20 seconds)" : "Search latest Front thread"}
-        </button>
-      )}
-      {res && (
+    <div className="wb-ctx wb-fmenu" ref={ref} role="dialog" aria-label="Front threads on this ticket" style={{ left: pos.x, top: pos.y }} onContextMenu={(e) => e.preventDefault()}>
+      <div className="wb-fmenu-sec">On this ticket ({linked.length})</div>
+      {linked.length === 0 && <div className="wb-fmenu-empty ba-muted">No Front thread yet.</div>}
+      {linked.map((t) => row(t.id, t.link, t.at, t.subject, t.fromNotion ? <span className="ba-muted"> · Front Link in Notion</span> : null))}
+      <div className="wb-fmenu-sec">
+        {fromAsk ? "Newer threads found in the background" : res ? <>Newest in Front for “{res.query}”</> : "Front"}
+      </div>
+      {busy === "search" && <div className="wb-fmenu-empty ba-muted">Searching Front…</div>}
+      {!res && busy !== "search" && <div className="wb-fmenu-empty ba-muted">The suggestions are put away. Search Front to look again.</div>}
+      {res && busy !== "search" && cands.length === 0 && <div className="wb-fmenu-empty ba-muted">{res.threads.length ? "Every thread found is on the ticket already." : "Nothing in Front for this customer in the last year."}</div>}
+      {busy !== "search" && about.map((t) => row(t.id, t.link, t.updatedAt, t.subject, t.why?.length ? <span className="wb-fmenu-why">names {t.why.join(", ")}</span> : null))}
+      {busy !== "search" && res && about.length === 0 && rest.length > 0 && <div className="wb-fmenu-empty ba-muted">No thread names this ticket.</div>}
+      {busy !== "search" && rest.length > 0 && (
         <>
-          <div className="wb-fmenu-head ba-muted">
-            {asked ? <>Newer Front threads for “{res.query}”: which one belongs to this ticket?</> : <>Newest Front threads for “{res.query}”</>}
-          </div>
-          {res.threads.length === 0 && <div className="wb-fmenu-empty ba-muted">Nothing in Front for this customer in the last year.</div>}
-          {res.threads.map((t) => (
-            <div key={t.id} className="wb-fmenu-row">
-              <a href={t.link} target="_blank" rel="noreferrer" title="Open in Front">
-                <span className="wb-fmenu-date">{t.updatedAt ? `${localDay(t.updatedAt)} · ${sinceLabel(t.updatedAt).toLowerCase()}` : ""}</span>
-                <span className="wb-fmenu-subj">{t.subject || "(no subject)"}</span>
-                {t.from && <span className="ba-muted"> · {t.from}</span>}
-              </a>
-              {t.linked ? <span className="ba-chip ghost">On ticket</span> : (
-                <button className="icon-btn ghost" disabled={!!busy} title="Tie this thread to the ticket so Last contact counts it" onClick={() => use(t)}>
-                  {busy === t.id ? "Adding…" : "Use"}
-                </button>
-              )}
-            </div>
-          ))}
-          {asked && (
-            <div className="wb-fmenu-foot">
-              <button className="icon-btn ghost" disabled={!!busy} title="None of these belong to the ticket: they won't be suggested again" onClick={() => { setBusy("dismiss"); void wbApi.frontDismiss(menu.url).then(onUsed).catch((e) => setErr(String(e?.message ?? e))).finally(() => setBusy(null)); }}>
-                None of these
-              </button>
-              <button className="icon-btn ghost" disabled={!!busy} onClick={() => { setRes(null); search(); }}>Search again</button>
-            </div>
-          )}
+          <button className="wb-fmenu-more" onClick={() => setShowRest((x) => !x)}>
+            {showRest ? "▾" : "▸"} Other mail with this customer ({rest.length})
+          </button>
+          {showRest && rest.map((t) => row(t.id, t.link, t.updatedAt, t.subject, t.other ? <span className="ba-muted"> · looks like “{t.other}”</span> : null))}
         </>
       )}
+      <form className="wb-fmenu-add" onSubmit={(e) => { e.preventDefault(); add(); }}>
+        <input value={paste} onChange={(e) => setPaste(e.target.value)} placeholder="Paste a Front link or a cnv_ / msg_ id" disabled={locked} />
+        <button className="icon-btn ghost" type="submit" disabled={locked || !paste.trim()}>{busy === "add" ? "Adding…" : "Add"}</button>
+      </form>
+      <div className="wb-fmenu-foot">
+        <button className="icon-btn primary" disabled={locked || !changes} onClick={save}>
+          {busy === "save" ? "Saving…" : changes ? `Save (${[toAdd.length && `+${toAdd.length}`, toRemove.length && `−${toRemove.length}`].filter(Boolean).join(" ")})` : "Save"}
+        </button>
+        {fromAsk && cands.length > 0 && (
+          <button className="icon-btn ghost" disabled={!!busy} title="None of the newer threads belong to the ticket: they won't be suggested again" onClick={() => { setBusy("dismiss"); void wbApi.frontDismiss(menu.url).then(() => { setRes(null); setFromAsk(false); onSaved(false); }).catch((e) => setErr(String(e?.message ?? e))).finally(() => setBusy(null)); }}>
+            None of these
+          </button>
+        )}
+        <button className="icon-btn ghost" disabled={!!busy} onClick={search}>{res && !fromAsk ? "Search again" : "Search Front"}</button>
+      </div>
       {err && <div className="chat-error">{err}</div>}
     </div>
   );

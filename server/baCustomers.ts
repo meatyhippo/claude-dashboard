@@ -39,7 +39,7 @@ import { keyPoints, mailView, readDraft, readThread, reply, suggestReply, thread
 import { handleFeedbackRoute } from "./baFeedback.ts";
 import { handlePublishedRoute } from "./baPublished.ts";
 import { askQai, composeQai, initQai, listQai, parseThread, qaiReplies, qaiToday } from "./baQai.ts";
-import { claudeShellCommand, SCRATCH_DIR } from "./paths.ts";
+import { claudeShellCommand, IS_DEV_COPY, SCRATCH_DIR } from "./paths.ts";
 import { createProject, ensureProjectFolder } from "./workspaces.ts";
 
 /**
@@ -90,8 +90,11 @@ export function initBaCustomers(database: Database) {
     if (f.enabled && f.inbox) void warmMail(round++).catch(() => {});
     if (f.enabled && f.qargoMcp) void qargoMcpStatus().catch(() => {});
   };
-  setTimeout(warm, 20_000);
-  setInterval(warm, 60_000);
+  // The development copy reads mail when you open the Inbox, not in the background.
+  if (!IS_DEV_COPY) {
+    setTimeout(warm, 20_000);
+    setInterval(warm, 60_000);
+  }
   db.exec(`
     CREATE TABLE IF NOT EXISTS ba_deals (
       deal_url        TEXT PRIMARY KEY,

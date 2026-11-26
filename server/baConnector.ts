@@ -249,6 +249,29 @@ export async function connectorBatch<I>(tool: string, inputs: I[], keyOf: (input
   const out = new Map<string, string>();
   if (!inputs.length) return out;
   mkdirSync(SCRATCH_DIR, { recursive: true });
+  // Direct mode: every input straight to the connector, six at a time; only what fails goes to a session.
+  if (directEnabled()) {
+    const t0 = Date.now();
+    const short = tool.replace(/^mcp__claude_ai_/, "");
+    const rest: I[] = [];
+    let next = 0;
+    const worker = async () => {
+      while (next < inputs.length) {
+        const input = inputs[next++]!;
+        try {
+          out.set(keyOf(input), await directCall(tool, input));
+        } catch (e) {
+          // The tool itself said no (a bad id, no access): a session would get the same answer.
+          if ((e as any)?.toolError !== true) rest.push(input);
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(6, inputs.length) }, worker));
+    console.log(`[connector] direct batch ${short} ${out.size}/${inputs.length} in ${Date.now() - t0}ms`);
+    if (!rest.length) return out;
+    console.warn(`[connector] direct batch ${short}: ${rest.length} failed, using a session`);
+    inputs = rest;
+  }
   const wanted = new Set(inputs.map(keyOf));
   const stop = new AbortController();
   const limit = setTimeout(() => stop.abort(), 180_000);

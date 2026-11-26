@@ -1,5 +1,5 @@
 import type { BaAction, BaAgendaEvent, BaSlackPost, BaDealSuggestions, BaCustomer, BaDeal, BaFrontThread, BaIrSession, BaMailThread, BaMailView, BaPublished, BaReply, BaQaiQuestion, BaRequirement, BaTicket, BaTriageThread, Cached } from "../shared/baCustomers.ts";
-import type { WbDigest, WbRow } from "../shared/wb.ts";
+import type { WbDigest, WbFrontCand, WbRow } from "../shared/wb.ts";
 import type { WorkspaceTerminal } from "../shared/terminals.ts";
 export type { WorkspaceTerminal };
 import type {
@@ -246,6 +246,7 @@ export type TimelineItem = (
       structured?: unknown;
     }
   | { kind: "error"; ts: number; text: string; connect?: string[] }
+  | { kind: "notice"; ts: number; text: string }
 ) & { agentId?: string };
 
 /** A subagent spawned by the Task tool inside a session. */
@@ -1728,9 +1729,11 @@ export const wbApi = {
   pin: (url: string, on: boolean) => post<{ pins: Record<string, number> }>("/api/ba/wb/pin", { url, on }),
   mode: (mode: "auto" | "step") => post<{ mode: string }>("/api/ba/wb/mode", { mode }),
   state: (url: string, k: string | null) => post<{ ok: true }>("/api/ba/wb/state", { url, k }),
-  frontSearch: (url: string) => post<{ threads: (BaFrontThread & { linked: boolean })[]; query: string; projectId: number | null; error?: string }>("/api/ba/wb/front-search", { url }),
+  frontSearch: (url: string) => post<{ threads: WbFrontCand[]; query: string; projectId: number | null; error?: string }>("/api/ba/wb/front-search", { url }),
   frontUse: (url: string, thread: BaFrontThread) => post<{ ok: boolean; error?: string }>("/api/ba/wb/front-use", { url, thread }),
   frontDismiss: (url: string) => post<{ ok: boolean }>("/api/ba/wb/front-dismiss", { url }),
+  frontSet: (url: string, add: BaFrontThread[], remove: string[]) => post<{ ok: boolean; error?: string }>("/api/ba/wb/front-set", { url, add, remove }),
+  frontAdd: (url: string, ref: string) => post<{ ok: boolean; error?: string }>("/api/ba/wb/front-add", { url, ref }),
   status: (url: string, status: string) => post<{ ok: true }>("/api/ba/wb/status", { url, status }),
   run: (url: string, kind: "start" | "step" | "status" | "generate" | "scope" | "stop" | "chat" | "next" | "explain", order?: number) => post<{ ok: boolean; key: string | null; error?: string }>("/api/ba/wb/run", { url, kind, order }),
   proposal: (url: string, approve: boolean) => post<{ ok: boolean }>("/api/ba/wb/proposal", { url, approve }),
