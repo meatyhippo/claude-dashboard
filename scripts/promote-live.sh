@@ -6,7 +6,8 @@
 #   ./scripts/promote-live.sh --full   rebuild and reinstall the whole app (for electron/ changes;
 #                                      quits the app window)
 #
-# The daemon restart takes a few seconds; open chats reconnect on their own.
+# The daemon restart takes a few seconds. Chats that were open are resumed afterwards
+# (same conversation, fresh process, their tools reloaded).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 APP="/Applications/Claude Dashboard.app"
@@ -33,7 +34,7 @@ fi
 busy() {
   curl -s --max-time 5 localhost:5757/api/agents | python3 -c "import json,sys
 d=json.load(sys.stdin); a=d if isinstance(d,list) else d.get('agents',[])
-b=[x.get('title') or '?' for x in a if x.get('status') in ('thinking','starting','awaiting_permission','permission')]
+b=[x.get('title') or '?' for x in a if x.get('status') in ('thinking','starting','awaiting-permission','awaiting_permission')]
 print(', '.join(b)); sys.exit(1 if b else 0)" 2>/dev/null
 }
 if [ "$WAIT" = 1 ]; then
@@ -47,9 +48,19 @@ rsync -a --delete dist/ "$RR/daemon/dist/"
 rsync -a server/ "$RR/daemon/server/"
 rsync -a shared/ "$RR/daemon/shared/"
 codesign --force --sign - --entitlements scripts/entitlements.plist --timestamp=none "$APP" 2>/dev/null
+# The chats open now: a daemon restart ends their processes, so resume them after it.
+OPEN=$(curl -s --max-time 5 localhost:5757/api/agents | python3 -c "import json,sys
+d=json.load(sys.stdin); a=d if isinstance(d,list) else d.get('agents',[])
+print(' '.join(x['sessionId'] for x in a if x.get('sessionId') and x.get('status') not in ('ended','error')))" 2>/dev/null || true)
 echo "→ restarting the live daemon"
 lsof -ti tcp:5757 -sTCP:LISTEN | xargs kill 2>/dev/null || true
 sleep 2
 env -u ELECTRON_RUN_AS_NODE PORT=5757 DASHBOARD_HOME="$HOME/.claude-dashboard" nohup "$RR/bun" run "$RR/daemon/server/index.ts" >> "$HOME/.claude-dashboard/daemon.log" 2>&1 &
 for _ in $(seq 1 20); do curl -s -o /dev/null localhost:5757/api/agents && break; sleep 1; done
 curl -s -o /dev/null -w "✓ live app updated (daemon answers %{http_code})\n" localhost:5757/api/agents
+n=0
+for sid in $OPEN; do
+  curl -s -o /dev/null -X POST localhost:5757/api/agents/restore -H 'content-type: application/json' -d "{\"sessionId\":\"$sid\"}" && n=$((n+1))
+done
+[ -n "$OPEN" ] && echo "✓ resumed $n open chat(s)"
+exit 0

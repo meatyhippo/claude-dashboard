@@ -36,7 +36,13 @@ async function check(): Promise<QargoMcpStatus> {
 
 export async function qargoMcpStatus(refresh = false): Promise<QargoMcpStatus> {
   if (!refresh && last && Date.now() - last.checkedAt < 5 * 60_000) return last;
-  running ??= check().then((s) => ((last = s), (running = null), s));
+  running ??= check().then((s) => {
+    last = s;
+    running = null;
+    // Signed in somewhere else (the app, a terminal, claude.ai): reconnect it in open chats that started without it.
+    for (const x of ["prod", "test"] as const) if (s[x] === "connected") void import("./agents.ts").then((m) => m.reconnectConnector(`claude.ai qargo-mcp-${x}`)).catch(() => {});
+    return s;
+  });
   return running;
 }
 

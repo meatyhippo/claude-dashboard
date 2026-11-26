@@ -1587,7 +1587,7 @@ const Item = memo(function Item({
 
     case "error":
       return (
-        <div className="chat-error">
+        <div className={`chat-error${item.text.startsWith("✓") ? " ok" : ""}`}>
           {item.text}
           {item.connect?.length ? <ConnectorSignIn names={item.connect} /> : null}
         </div>
@@ -1621,7 +1621,7 @@ export function ConnectorSignIn({ names, okText, onSignedIn }: { names: string[]
         return (
           <span key={name} className="chat-connect-row">
             {st === "ok" ? (
-              <span>✓ {label} signed in.{" "}{okText ?? "Start the chat again (Resume, or the ticket's Chat)."}</span>
+              <span>✓ {label} signed in.{" "}{okText ?? "Its tools come back in your open chats by themselves: carry on."}</span>
             ) : (
               <button className="icon-btn" disabled={st === "waiting"} onClick={() => void start(name)}>
                 {st === "waiting" ? "Finish in your browser…" : `Sign in to ${label}`}
