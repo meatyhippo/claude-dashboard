@@ -136,6 +136,64 @@ async function oneCallInner(model: string, tool: string, input: unknown, reason:
   return result === null ? null : unpersist(result);
 }
 
+export type ConnectorState = {
+  /** `connected`, `needs-auth`, `failed`, `disabled`, `pending` (still connecting when we gave up), or `missing`. */
+  status: string;
+  /** The connector's tools by short name, when connected. */
+  tools: string[];
+};
+
+/**
+ * One claude.ai connector's state and tools, e.g. `connectorState("claude.ai Slack")`.
+ * Which tools a connector offers differs between accounts (one person's Slack has
+ * file uploads, another's does not).
+ *
+ * The prompt is a stream that never sends anything, so no model call is made: the
+ * MCP status is a control request Claude Code answers on its own. Connectors join
+ * a few seconds after start, so this waits while the one asked about is pending.
+ */
+export async function connectorState(name: string, waitMs = 30_000): Promise<ConnectorState> {
+  mkdirSync(SCRATCH_DIR, { recursive: true });
+  const stop = new AbortController();
+  const limit = setTimeout(() => stop.abort(), waitMs + 30_000);
+  const silent = (async function* (): AsyncGenerator<never> {
+    await new Promise<void>((done) => stop.signal.addEventListener("abort", () => done()));
+  })();
+  const q = query({
+    prompt: silent as any,
+    options: {
+      env: claudeEnv(),
+      cwd: SCRATCH_DIR,
+      persistSession: false,
+      settingSources: ["user"],
+      skills: [],
+      allowedTools: [],
+      permissionMode: "dontAsk",
+      abortController: stop,
+    },
+  });
+  // Drain the stream so the process is not held up by unread messages.
+  const drained = (async () => {
+    try {
+      for await (const _ of q as AsyncIterable<unknown>);
+    } catch {}
+  })();
+  try {
+    const until = Date.now() + waitMs;
+    for (;;) {
+      const server = (await q.mcpServerStatus()).find((s) => s.name === name);
+      if (!server) return { status: "missing", tools: [] };
+      if (server.status !== "pending" || Date.now() > until)
+        return { status: server.status, tools: server.status === "connected" ? (server.tools ?? []).map((t) => t.name) : [] };
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  } finally {
+    clearTimeout(limit);
+    stop.abort();
+    await drained;
+  }
+}
+
 /**
  * Claude Code moves a large tool result to a file and hands back a pointer
  * ("<persisted-output> … Full output saved to: /path"). Read the file instead.

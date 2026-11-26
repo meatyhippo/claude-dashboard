@@ -1,10 +1,9 @@
 import type { Database } from "bun:sqlite";
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { groupName, type BaCustomer, type BaPublished } from "../shared/baCustomers.ts";
 import { listArtifacts } from "./artifacts.ts";
-import { artifactsDir, DATA_DIR } from "./paths.ts";
+import { artifactsDir, DATA_DIR, PROJECTS_DIR } from "./paths.ts";
 
 /**
  * Published claude.ai artifacts, linked to the dashboard's local ones and to customers.
@@ -20,7 +19,6 @@ import { artifactsDir, DATA_DIR } from "./paths.ts";
  *   tool exists there and not in the daemon's background calls.
  */
 
-const PROJECTS_DIR = join(homedir(), ".claude", "projects");
 export const SNAPSHOT_PATH = join(DATA_DIR, "published-artifacts.json");
 const URL_RE = /https:\/\/claude\.ai\/(?:code\/)?artifact\/[\w-]+/;
 

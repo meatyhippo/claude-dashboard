@@ -399,6 +399,8 @@ export type Settings = {
     drawingsRoot: string;
     notesRoot: string;
     projectsRoot?: string;
+    /** Claude Code profile folder; empty means ~/.claude. Takes a daemon restart. */
+    claudeHome?: string;
     /** Hide tool calls and thinking in conversations. */
     hideToolCalls: boolean;
     /** Dock pages turned off, by key. Absent means all of them are on. */
@@ -1313,6 +1315,53 @@ async function postResult<T extends { ok: boolean; error: string | null }>(
   return { ok: false, error: data.error ?? `${path} → ${res.status}` } as T;
 }
 
+export type TransferPreview = {
+  token: string;
+  title: string | null;
+  messages: number;
+  mcpServers: string[];
+  files: number;
+  bytes: number;
+  large: boolean;
+  tooLarge: boolean;
+  secrets: { label: string; count: number }[];
+};
+
+export type SlackStatus = { state: string; search: boolean; upload: boolean; missing: string[] };
+
+/** Handing a session to a colleague as one `.claudesession` file. */
+export const transferApi = {
+  /** Makes the file and describes it; its token names that exact file for Save and Send. */
+  preview: (sessionId: string) => get<TransferPreview>(`/api/transfer/preview?id=${encodeURIComponent(sessionId)}`),
+  /** Writes the previewed file to ~/Downloads, shows it in Finder and brings Slack forward. */
+  export: (token: string, ack: boolean) => post<{ path: string }>("/api/transfer/export", { token, ack }),
+  /** Whether the user's Slack connector is connected, and can find people and upload files. */
+  slackStatus: (refresh = false) =>
+    get<SlackStatus>(`/api/transfer/slack/status${refresh ? "?refresh=1" : ""}`),
+  /** People matching a name, through the Slack connector on the user's claude.ai account. */
+  slackPeople: (query: string) =>
+    post<{ people: { id: string; name: string; email: string; title: string }[] }>("/api/transfer/slack/people", { query }),
+  /** Uploads the previewed file and shares it in a DM with that person. Takes ~30 s. */
+  slackSend: (token: string, ack: boolean, userId: string, comment: string) =>
+    post<{ to: string; channel: string; link: string | null; name: string }>("/api/transfer/slack/send", {
+      token,
+      ack,
+      userId,
+      comment,
+    }),
+  import: async (file: File, folder?: string) => {
+    const q = folder?.trim() ? `?folder=${encodeURIComponent(folder.trim())}` : "";
+    const res = await fetch(`/api/transfer/import${q}`, {
+      method: "POST",
+      headers: { "content-type": "application/octet-stream" },
+      body: file,
+    });
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
+    if (!res.ok) throw new Error(data.error ?? `import failed (${res.status})`);
+    return data as { sessionId: string; cwd: string; title: string | null };
+  },
+};
+
 export const agentApi = {
   list: () => get<{ agents: AgentSummary[]; restorable: Restorable[] }>("/api/agents"),
   restore: (sessionId: string) => post<{ key: string }>("/api/agents/restore", { sessionId }),
@@ -1522,6 +1571,10 @@ async function errorText(res: Response, path: string): Promise<string> {
 }
 
 export const api = {
+  health: () =>
+    get<{ ok: boolean; claudeHome: string; claudeHomeSource: "CLAUDE_HOME" | "CLAUDE_CONFIG_DIR" | "settings" | "default" }>(
+      "/api/health",
+    ),
   live: () => get<LivePayload>("/api/live"),
   usage: () => get<UsagePayload>("/api/usage"),
   overview: () => get<Overview>("/api/overview"),

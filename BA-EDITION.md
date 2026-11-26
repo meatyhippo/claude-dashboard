@@ -40,7 +40,40 @@ The edition reads through your **claude.ai connectors**, so connect these in cla
 | Build on the Qargo MCP | Create integration / mapping / visibility mapping from an IR (test tenant by default; prod asks first) |
 | Qargo diagrams | Excalidraw styleguide: integration-landscape template, shape library, style check, customer export |
 | Published artifacts | claude.ai artifacts on the Artifacts page and customer pages, downloadable locally |
+| Session handoff | **⋮ → Send to a colleague…** sends a session in a Slack DM; **History → Import session** takes one in and resumes it |
 | Feedback mode | A Feedback button that pins notes to any element, for the next round of changes |
+
+## Session handoff
+
+**⋮ → Send to a colleague…** packs a session into one `.claudesession` file and shares it in
+a Slack DM. A preview first shows the message count, the MCP connectors it used and any
+credentials it spotted in any text file of the session, which must be acknowledged before
+anything leaves (the daemon checks this too, not only the page). Save and Send use the exact
+file the preview made, so a session that carries on meanwhile can't add an unchecked secret.
+Symbolic links in the session folder are left out. Everything Claude read is in the file, customer data included. The recipient is picked
+from a Slack search (name, email when shown, title), never guessed.
+
+Sending is four connector calls through the Slack connector (`server/slackSend.ts`): search,
+open the DM, get a signed upload URL, share. The daemon uploads the bytes itself, so the file
+never passes through a model. **Save file** writes it to `~/Downloads` and opens Slack for
+sending by hand.
+
+Not every account's Slack connector offers the upload tools. The dialog checks first by asking
+Claude Code for the connector's state and tools, which takes about 5 seconds and no model call.
+A connector with everything is trusted for an hour, one without the upload tools for ten
+minutes, and one that isn't connected is checked every time the dialog opens (or with **Check
+again**). Without the tools, Save file is the way to send, and the dialog says why. Files up to
+512 MB can be handed over.
+
+**History → Import session** writes it into this machine's Claude Code profile under a new id,
+in its own folder under `~/.claude-dashboard/imported`, and resumes it. The colleague carries on
+signed in to Notion, Front and the rest as themselves.
+
+What travels: the conversation, subagent transcripts and saved tool output (large MCP results
+and screenshots, which the transcript points at by path). Raw API request copies, account ids
+and cost records stay behind. Every path naming the sender's machine is rewritten in one pass.
+The file is gzipped JSON: `gunzip -c file.claudesession` shows what is in it
+(`server/sessionTransfer.ts`).
 
 ## How data is read
 
@@ -62,9 +95,12 @@ New code is in new files, so Rein's updates merge with few conflicts:
 Rein's files only gain hooks guarded by the switches: `server/index.ts` (route, boot),
 `server/calendarSources.ts` (connector calendar), `src/App.tsx`, `src/pages.ts`,
 `src/api.ts`, `ProjectPage`, `ProjectsView`, `SettingsView`, `ArtifactsView`,
-`DesktopView`, `Drawing*`, `FolderPicker`, `LocationPicker`, `WorkspaceTree` and `styles.css`
+`DesktopView`, `Drawing*`, `FolderPicker`, `HistoryView`, `LocationPicker`, `SessionMenu`, `WorkspaceTree` and `styles.css`
 (BA classes only). Two build fixes apply to everyone: `scripts/preflight.sh` (Homebrew bun)
 and `scripts/build-app.sh` (rebuilds over a read-only bun; signing a checkout in iCloud Drive).
+
+Session handoff is in `server/sessionTransfer.ts`, `server/slackSend.ts` and
+`src/components/SessionTransfer.tsx`.
 
 ## Note
 

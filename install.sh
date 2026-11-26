@@ -156,9 +156,9 @@ else
 fi
 
 if has_claude_home; then
-  ok "~/.claude found — there is history to index"
+  ok "$(claude_home) found — there is history to index"
 else
-  warn "~/.claude does not exist yet"
+  warn "$(claude_home) does not exist yet"
   hint "run Claude Code once; the dashboard reads its transcripts from there"
 fi
 
