@@ -75,11 +75,16 @@ export type WbRow = WbTicket & {
   /** The newest email across the ticket's Front threads (Sander's "Last Contact Date"); null until they are read. */
   contact?: WbContact | null;
   /** Newer Front threads the background search found but could not place: the user picks. */
-  frontAsk?: { at: number; query: string; threads: (import("./baCustomers.ts").BaFrontThread & { linked: boolean })[] } | null;
+  /** Every Front thread on the ticket (read or not), newest first. */
+  frontLinked?: WbLinkedThread[];
+  frontAsk?: { at: number; query: string; threads: WbFrontCand[] } | null;
   /** A question to Qai the ticket's chat is waiting on (its answer is fed back automatically). */
   qai?: { at: number; link: string | null } | null;
 };
 
+/** A Front thread found for a ticket: how well its subject names the ticket, and whose it is if another ticket's. */
+export type WbFrontCand = import("./baCustomers.ts").BaFrontThread & { linked: boolean; score?: number; why?: string[]; other?: string | null };
+export type WbLinkedThread = { id: string; subject: string; link: string; at: number | null; fromNotion: boolean };
 export type WbContact = { at: number; who: string; inbound: boolean; threads: { id: string; subject: string; link: string; at: number; who: string; inbound: boolean }[] };
 
 export type WbDigestItem = { n: number; title: string; meta: string; text: string; quote: string; who: string; links: { url: string; label: string }[]; ticketUrl: string | null };

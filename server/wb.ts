@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import type { Cached } from "../shared/baCustomers.ts";
-import { nextStep, stageOf, tabOf, WB_PHASES, type WbDeal, type WbDigest, type WbNext, type WbProposal, type WbRow, type WbStateKey, type WbStep, type WbTicket, type WbContact } from "../shared/wb.ts";
+import { nextStep, stageOf, tabOf, WB_PHASES, type WbDeal, type WbDigest, type WbNext, type WbProposal, type WbRow, type WbStateKey, type WbStep, type WbTicket, type WbContact, type WbLinkedThread } from "../shared/wb.ts";
 import { labelFolderProject } from "./workspaces.ts";
 import { getAgent, interruptAgent, onRestore, sendMessage, startAgent } from "./agents.ts";
 import { cached, connectorBatch, connectorCall, FRONT_SEARCH, NOTION_QUERY, notionSql, parseJson, peekCache } from "./baConnector.ts";
@@ -14,7 +14,7 @@ import { readThread, readThreadsBatch } from "./baMail.ts";
 import { readQaiAnswer, sendQaiDm } from "./baQai.ts";
 import { domainOf, type BaFrontThread, type BaMailThread } from "../shared/baCustomers.ts";
 import { frontThreads, getCustomer, linkThread } from "./baCustomers.ts";
-import { DATA_DIR } from "./paths.ts";
+import { DATA_DIR, IS_DEV_COPY } from "./paths.ts";
 
 /**
  * Workbench: the Integration Workbench on the BA edition's backbone.
@@ -268,7 +268,17 @@ function contactThreads(t: WbTicket): { cnv: string[]; msg: string[] } {
   for (const id of kv<Record<string, string[]>>("extraThreads", {})[t.url] ?? []) cnv.add(id);
   const req = pid(t.request);
   if (req) for (const r of db.query<{ thread_id: string; ir_url: string }, []>("SELECT thread_id, ir_url FROM ba_thread_links WHERE ir_url IS NOT NULL").all()) if (pid(r.ir_url) === req) cnv.add(r.thread_id);
+  // Threads taken off the ticket by hand stay off, wherever they came from (even the Notion Front Link).
+  for (const id of kv<Record<string, string[]>>("frontHidden", {})[t.url] ?? []) cnv.delete(id);
   return { cnv: [...cnv], msg };
+}
+/** Every thread on the ticket, read or not, for the thread picker and the expanded card. */
+function linkedThreads(t: WbTicket): WbLinkedThread[] {
+  return contactThreads(t).cnv.map((id) => {
+    const th = peekCache<BaMailThread>(`thread:${id}`);
+    const last = th?.entries.filter((e) => e.kind === "message" && e.at).sort((a, b) => (a.at ?? 0) - (b.at ?? 0)).pop();
+    return { id, subject: th?.subject ?? "", link: th?.link || `https://app.frontapp.com/open/${id}`, at: last?.at ?? null, fromNotion: t.front.includes(id) };
+  }).sort((a, b) => (b.at ?? 0) - (a.at ?? 0));
 }
 function contactOf(t: WbTicket): WbContact | null {
   const threads = contactThreads(t).cnv.flatMap((id) => {
@@ -315,7 +325,8 @@ function frontQueryOf(t: WbTicket): { query: string; projectId: number | null } 
       contactThreads(t).cnv.flatMap((id) => {
         const th = peekCache<BaMailThread>(`thread:${id}`);
         return (th?.entries ?? []).flatMap((e) => [e.fromAddress ?? "", ...e.to]).filter((x) => /@/.test(x)).map((x) => domainOf(x.toLowerCase()));
-      }).filter((d): d is string => !!d && !/qargo\./i.test(d)),
+      // Our own domain and tools that send mail (Notion, Google, Slack…) say nothing about the customer.
+      }).filter((d): d is string => !!d && !/qargo\.|notion\.so|google\.com|gmail\.com|frontapp|slack|atlassian|hubspot|zoom\.us|microsoft|outlook\.com/i.test(d)),
     ),
   ];
   const short = t.customer.replace(/\b(limited|ltd|bv|b\.v\.|nv|n\.v\.|gmbh|sa|group|partnership|global|logistics?|transport|services)\b\.?/gi, " ").replace(/[^\p{L}\p{N}&' -]/gu, " ").replace(/\s+/g, " ").trim();
@@ -323,75 +334,165 @@ function frontQueryOf(t: WbTicket): { query: string; projectId: number | null } 
   return { query, projectId };
 }
 const frontSearchInput = (query: string) => ({ query, scope: "all_inboxes", filters: { after: new Date(Date.now() - 365 * 86_400_000).toISOString().slice(0, 10) }, reason: "Finds the newest conversations with one customer, for the last contact date on a dashboard ticket." });
-function frontResults(t: WbTicket, raw: string) {
+
+// ── Which thread belongs to which ticket ─────────────────────────────────────
+// Front's search results carry a subject, not the people on the thread. A customer's query finds
+// all their mail, about every ticket they have, so a thread is matched on the ticket's own topic:
+// "Blue Water Shipping: HANDTRANS" is about Blue Water Shipping, with customer HANDTRANS.
+const NOISE = new Set("with from that this have your will into over about change setup test testing ticket support the and for qargo tms build scoping scope request integration integrations phase new project usecase use case limited ltd bv nv gmbh group partnership global plc inc".split(" "));
+// Words every integration ticket shares: a weak hint at most.
+const GENERIC = new Set("edi api pod pods visibility generic export import order orders invoice invoices invoicing creation custom report reporting status statuses webhook webhooks transport logistics services division customer customers shipment shipments xml csv file files accounting dispatch update updates".split(" "));
+// Notion's own notification mails name the ticket in the subject, but are not customer contact.
+const NOTIFICATION = /\b(updated|edited|mentioned you in|commented (in|on)|replied (in|to a comment)|made updates in|invited you to|assigned you)\b|^(canceled|cancelled|invitation|updated invitation|accepted|declined|tentatively accepted|reminder|page shared with you)( event)?:/i;
+const tokensOf = (s: string) => (s.toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").match(/[\p{L}\p{N}]{2,}/gu) ?? []);
+const compactOf = (s: string) => s.toLowerCase().normalize("NFKD").replace(/[^\p{L}\p{N}]/gu, "");
+type Topic = { strong: string[]; pairs: string[]; weak: string[]; cust: string[]; runs: string[] };
+function topicOf(t: WbTicket): Topic {
+  const cust = [...new Set(tokensOf(t.customer).filter((w) => w.length >= 3 && !NOISE.has(w) && !GENERIC.has(w)))];
+  const text = [t.task, t.reqTask].join(" · ").replace(/\b(PS (Build|Scoping)|Scoping|Integration Request|IR)\s*[-:]\s*/gi, " ");
+  const toks = tokensOf(text);
+  // "Solution" in a title is still the customer "… Solutions".
+  // Titles are cut short ("… TRANSPORT LIMIT", "… Global Logi"): a word that starts a customer or common word is one.
+  const ofCust = (w: string) => cust.includes(w.replace(/s$/, "")) || cust.some((c) => c.startsWith(w) || c.startsWith(w.replace(/s$/, "")));
+  const cutCommon = (w: string) => w.length >= 3 && [...NOISE, ...GENERIC].some((c) => c !== w && c.startsWith(w));
+  const isStrong = (w: string) => w.length >= 3 && !NOISE.has(w) && !GENERIC.has(w) && !ofCust(w) && !cutCommon(w) && !/^\d+$/.test(w);
+  const strong = [...new Set(toks.filter(isStrong))];
+  const weak = [...new Set(toks.filter((w) => GENERIC.has(w)))];
+  // "Blue Water" is also written "Bluewater": adjacent topic words, joined.
+  const pairs: string[] = [];
+  const runs: string[] = [];
+  let run: string[] = [];
+  for (const w of [...toks, ""]) {
+    if (w && isStrong(w)) {
+      if (run.length) pairs.push(run[run.length - 1] + w);
+      run.push(w);
+    } else {
+      if (run.length) runs.push(run.join(" "));
+      run = [];
+    }
+  }
+  return { strong, pairs: [...new Set(pairs)], weak, cust, runs: [...new Set(runs)] };
+}
+type FrontMatch = { score: number; why: string[] };
+function matchOf(tp: Topic, subject: string): FrontMatch {
+  const words = new Set(tokensOf(subject));
+  const compact = compactOf(subject);
+  const why: string[] = [];
+  let score = 0;
+  for (const p of tp.pairs) if (compact.includes(p)) (score += 3), why.push(p);
+  for (const w of tp.strong) {
+    if (why.some((x) => x.includes(w))) continue;
+    // "Sage" also names "Sage50": a word that starts with the topic word counts.
+    if (words.has(w) || (w.length >= 6 && compact.includes(w)) || (w.length >= 4 && [...words].some((x) => x.startsWith(w) && /^\d+$/.test(x.slice(w.length))))) (score += w.length >= 5 ? 2 : 1), why.push(w);
+  }
+  for (const w of tp.weak) if (words.has(w)) score += 0.5;
+  if (tp.cust.some((w) => words.has(w) || (w.length >= 6 && compact.includes(w)))) score += 1;
+  return { score, why };
+}
+/** The customer's other tickets: a thread on one of those, or that names its topic better, is theirs. */
+function siblingsOf(t: WbTicket) {
+  return peekTickets()
+    .filter((x) => x.url !== t.url && x.customer === t.customer)
+    .map((x) => ({ title: x.task, topic: topicOf(x), on: new Set(contactThreads(x).cnv) }));
+}
+type WbFrontCand = BaFrontThread & { linked: boolean; score: number; why: string[]; other: string | null };
+function frontResults(t: WbTicket, raws: string[]): WbFrontCand[] {
   const linked = new Set(contactThreads(t).cnv);
-  return frontThreads(raw)
-    .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
-    .slice(0, 12)
-    .map((x) => ({ ...x, linked: linked.has(x.id) }));
+  const tp = topicOf(t);
+  const sibs = siblingsOf(t);
+  // Names of the other customers on the Workbench: a thread naming one of them (and not this one) is theirs.
+  const others = [...new Set(peekTickets().filter((x) => x.customer !== t.customer).flatMap((x) => topicOf(x).cust))].filter((w) => w.length >= 4 && !tp.cust.includes(w) && !tp.strong.includes(w));
+  const seen = new Map<string, WbFrontCand>();
+  for (const [n, raw] of raws.entries()) {
+    for (const x of frontThreads(raw)) {
+      if (seen.has(x.id) || NOTIFICATION.test(x.subject ?? "")) continue;
+      const m = matchOf(tp, x.subject ?? "");
+      const words = new Set(tokensOf(x.subject ?? ""));
+      const foreign = others.find((w) => words.has(w));
+      if (foreign && !tp.cust.some((w) => words.has(w))) m.score -= 2;
+      let other: string | null = null;
+      const on = sibs.find((s) => s.on.has(x.id));
+      if (on) (other = on.title), (m.score -= 5);
+      else {
+        const better = sibs.find((s) => matchOf(s.topic, x.subject ?? "").score > m.score + 1);
+        if (better) (other = better.title), (m.score -= 2);
+      }
+      // From the topic search (not the customer's): only when the subject is clearly about this ticket.
+      if (n > 0 && m.score < 3) continue;
+      seen.set(x.id, { ...x, linked: linked.has(x.id), score: m.score, why: m.why, other });
+    }
+  }
+  return [...seen.values()].sort((a, b) => Number(b.score >= 2) - Number(a.score >= 2) || b.score - a.score || (b.updatedAt ?? 0) - (a.updatedAt ?? 0)).slice(0, 15);
+}
+/** What the picker says it searched: the customer, and the ticket's topic. */
+function searchLabel(t: WbTicket): string {
+  const tp = topicOf(t);
+  return [frontQueryOf(t).query.replace(/"/g, ""), tp.runs[0]].filter(Boolean).join(" · ");
+}
+/** The searches for a ticket: the customer's mail, and (when the title names one) its topic. */
+function frontQueriesOf(t: WbTicket): string[] {
+  const { query } = frontQueryOf(t);
+  const tp = topicOf(t);
+  const parts = [...tp.runs.map((r) => (r.includes(" ") ? `"${r}"` : r)), ...tp.pairs].slice(0, 5);
+  return parts.length ? [query, parts.join(" OR ")] : [query];
 }
 
-/** Right-click "Search latest Front thread": the customer's newest conversations, newest first. */
-export async function wbFrontSearch(url: string): Promise<{ threads: (BaFrontThread & { linked: boolean })[]; query: string; projectId: number | null }> {
+/** Right-click / the thread picker: the customer's newest conversations, the ones about this ticket first. */
+export async function wbFrontSearch(url: string): Promise<{ threads: WbFrontCand[]; query: string; projectId: number | null }> {
   const t = ticketOf(url);
   if (!t) throw new Error("ticket not found");
-  const { query, projectId } = frontQueryOf(t);
-  const raw = await connectorCall(FRONT_SEARCH, frontSearchInput(query), "Search the newest Front conversations with this customer.");
-  return { threads: frontResults(t, raw), query, projectId };
+  const { projectId } = frontQueryOf(t);
+  const qs = frontQueriesOf(t);
+  const got = await connectorBatch(FRONT_SEARCH, qs.map(frontSearchInput), (x) => x.query, "Search the newest Front conversations with this customer.");
+  if (!got.has(qs[0]!)) throw new Error("Front did not answer the search");
+  return { threads: frontResults(t, qs.map((q) => got.get(q) ?? "")), query: searchLabel(t), projectId };
 }
 
 // ── Automatic Front search: what right-click did, in the background ───────────
-export type WbFrontAsk = { at: number; query: string; threads: (BaFrontThread & { linked: boolean })[] };
-const STOP_WORDS = new Set("with from that this have your will into over about integration integrations request change setup order orders customer qargo import export update test testing ticket support".split(" "));
-const wordsOf = (s: string) => (s.toLowerCase().match(/[\p{L}\p{N}]{4,}/gu) ?? []).filter((w) => !STOP_WORDS.has(w));
+export type WbFrontAsk = { at: number; query: string; threads: WbFrontCand[] };
 let frontAutoRun = 0;
 /**
  * Every half hour, for tickets whose last contact is missing or older than two days (each at most
- * twice a day): search Front the way right-click does. Newer threads whose subject names the ticket
- * (its title, request or integration) and is the only such one are tied to the ticket; any other
- * newer thread is a doubt, shown on the row for the user to pick.
+ * twice a day): search Front the way the picker does. A newer thread that clearly names the
+ * ticket's topic, and is the only one, is tied to the ticket; other newer threads about the topic
+ * are shown on the row to pick from. Threads that match nothing on the ticket are not suggested.
  */
-async function autoFrontSearch(rows: WbTicket[]) {
-  if (Date.now() - frontAutoRun < 30 * 60_000) return;
+async function autoFrontSearch(rows: WbTicket[], force = false) {
+  if (!force && Date.now() - frontAutoRun < 30 * 60_000) return;
   frontAutoRun = Date.now();
   const done = kv<Record<string, number>>("frontAuto", {});
   const dismissed = kv<Record<string, string[]>>("frontDismissed", {});
   const due = rows.filter((t) => {
-    if (Date.now() - (done[t.url] ?? 0) < 12 * 3_600_000) return false;
+    if (!force && Date.now() - (done[t.url] ?? 0) < 12 * 3_600_000) return false;
     const c = contactOf(t);
     // A Front Link still being read has no contact yet: wait for it rather than search.
     if (!c && /(cnv|msg)_[a-z0-9]+/i.test(t.front) && contactThreads(t).msg.length) return false;
     return !c || Date.now() - c.at > 2 * 86_400_000;
   });
   if (!due.length) return;
-  const byQuery = new Map<string, WbTicket[]>();
+  const queries = new Map(due.map((t) => [t.url, frontQueriesOf(t)]));
+  const all = [...new Set([...queries.values()].flat())];
+  const got = await connectorBatch(FRONT_SEARCH, all.map(frontSearchInput), (x) => x.query, "Search the newest Front conversations with these customers.").catch(() => new Map<string, string>());
   for (const t of due) {
-    const q = frontQueryOf(t).query;
-    byQuery.set(q, [...(byQuery.get(q) ?? []), t]);
-  }
-  const got = await connectorBatch(FRONT_SEARCH, [...byQuery.keys()].map(frontSearchInput), (x) => x.query, "Search the newest Front conversations with these customers.").catch(() => new Map<string, string>());
-  for (const [query, ts] of byQuery) {
-    const raw = got.get(query);
-    if (raw == null) continue;
-    for (const t of ts) {
-      mapPut("frontAuto", t.url, Date.now());
-      const since = contactOf(t)?.at ?? 0;
-      const skip = new Set(dismissed[t.url] ?? []);
-      const newer = frontResults(t, raw).filter((x) => !x.linked && !skip.has(x.id) && (x.updatedAt ?? 0) > since);
-      if (!newer.length) {
-        mapPut("frontAsk", t.url, null);
-        continue;
-      }
-      const words = new Set(wordsOf([t.task, t.reqTask, ...t.integ].join(" ")));
-      const named = newer.filter((x) => wordsOf(x.subject ?? "").some((w) => words.has(w)));
-      if (named.length === 1) {
-        await wbFrontUse(t.url, named[0]!).catch(() => null);
-        console.log(`[wb] front auto: ${t.task} ← ${named[0]!.subject}`);
-        const rest = newer.filter((x) => x.id !== named[0]!.id && (x.updatedAt ?? 0) > (named[0]!.updatedAt ?? 0));
-        mapPut("frontAsk", t.url, rest.length ? { at: Date.now(), query, threads: rest.slice(0, 6) } : null);
-      } else {
-        mapPut("frontAsk", t.url, { at: Date.now(), query, threads: newer.slice(0, 6) } satisfies WbFrontAsk);
-      }
+    const qs = queries.get(t.url)!;
+    if (!got.has(qs[0]!)) continue;
+    mapPut("frontAuto", t.url, Date.now());
+    const since = contactOf(t)?.at ?? 0;
+    const skip = new Set(dismissed[t.url] ?? []);
+    const newer = frontResults(t, qs.map((q) => got.get(q) ?? "")).filter((x) => !x.linked && !skip.has(x.id) && (x.updatedAt ?? 0) > since && x.score >= 2 && !x.other);
+    const query = searchLabel(t);
+    if (!newer.length) {
+      mapPut("frontAsk", t.url, null);
+      continue;
+    }
+    const [top, second] = newer;
+    if (top!.score >= 4 && (second?.score ?? 0) <= top!.score - 2) {
+      await wbFrontUse(t.url, top!).catch(() => null);
+      console.log(`[wb] front auto: ${t.task} ← ${top!.subject} (${top!.why.join(", ")})`);
+      const rest = newer.slice(1).filter((x) => (x.updatedAt ?? 0) > (top!.updatedAt ?? 0));
+      mapPut("frontAsk", t.url, rest.length ? { at: Date.now(), query, threads: rest.slice(0, 6) } : null);
+    } else {
+      mapPut("frontAsk", t.url, { at: Date.now(), query, threads: newer.slice(0, 6) } satisfies WbFrontAsk);
     }
   }
 }
@@ -406,7 +507,7 @@ export function wbFrontDismiss(url: string) {
 }
 
 /** Tie a Front conversation to the ticket's request, so Last contact counts it. */
-export async function wbFrontUse(url: string, thread: BaFrontThread): Promise<{ ok: boolean; error?: string }> {
+export async function wbFrontUse(url: string, thread: BaFrontThread, read = true): Promise<{ ok: boolean; error?: string }> {
   const t = ticketOf(url);
   if (!t) return { ok: false, error: "ticket not found" };
   const projectId = projectOfTicket(t);
@@ -414,12 +515,67 @@ export async function wbFrontUse(url: string, thread: BaFrontThread): Promise<{ 
   if (projectId && t.request) linkThread(thread, projectId, t.request, "manual");
   const extra = kv<Record<string, string[]>>("extraThreads", {});
   mapPut("extraThreads", url, [...new Set([...(extra[url] ?? []), thread.id])]);
+  const hidden = kv<Record<string, string[]>>("frontHidden", {})[url] ?? [];
+  if (hidden.includes(thread.id)) mapPut("frontHidden", url, hidden.filter((x) => x !== thread.id));
   const ask = kv<Record<string, WbFrontAsk | null>>("frontAsk", {})[url];
   if (ask) {
     const rest = ask.threads.filter((x) => x.id !== thread.id && (x.updatedAt ?? 0) > (thread.updatedAt ?? 0));
     mapPut("frontAsk", url, rest.length ? { ...ask, threads: rest } : null);
   }
-  await readThreadsBatch([thread.id]).catch(() => 0);
+  if (read) await readThreadsBatch([thread.id]).catch(() => 0);
+  return { ok: true };
+}
+
+/** A suggestion list without the threads that are on the ticket by now. */
+function askOf(t: WbTicket, ask: WbFrontAsk | null | undefined): WbFrontAsk | null {
+  if (!ask) return null;
+  const on = new Set(contactThreads(t).cnv);
+  const threads = ask.threads.filter((x) => !on.has(x.id));
+  return threads.length ? { ...ask, threads } : null;
+}
+
+/** Take a thread off the ticket: off its request link and the extra list, and hidden from the Notion Front Link. */
+function frontRemove(t: WbTicket, id: string) {
+  const extra = kv<Record<string, string[]>>("extraThreads", {})[t.url] ?? [];
+  if (extra.includes(id)) mapPut("extraThreads", t.url, extra.filter((x) => x !== id));
+  // The customer placement stays (the Inbox still knows the thread); only the tie to this request goes.
+  const req = pid(t.request);
+  if (req) for (const r of db.query<{ ir_url: string }, [string]>("SELECT ir_url FROM ba_thread_links WHERE thread_id = ? AND ir_url IS NOT NULL").all(id)) if (pid(r.ir_url) === req) db.query("UPDATE ba_thread_links SET ir_url = NULL WHERE thread_id = ?").run(id);
+  const hidden = kv<Record<string, string[]>>("frontHidden", {})[t.url] ?? [];
+  mapPut("frontHidden", t.url, [...new Set([...hidden, id])]);
+}
+
+/** The thread picker's Save: add the ticked threads, take the unticked ones off. */
+export async function wbFrontSet(url: string, add: BaFrontThread[], remove: string[]): Promise<{ ok: boolean; error?: string }> {
+  const t = ticketOf(url);
+  if (!t) return { ok: false, error: "ticket not found" };
+  for (const id of remove) frontRemove(t, id);
+  for (const th of add) await wbFrontUse(url, th, false);
+  if (add.length) await readThreadsBatch(add.map((x) => x.id)).catch(() => 0);
+  return { ok: true };
+}
+
+/** Add a thread by hand: a Front link, a cnv_ id or a msg_ id. */
+export async function wbFrontAdd(url: string, ref: string): Promise<{ ok: boolean; error?: string }> {
+  const t = ticketOf(url);
+  if (!t) return { ok: false, error: "ticket not found" };
+  let id = ref.match(/cnv_[a-z0-9]+/i)?.[0] ?? null;
+  const msg = ref.match(/msg_[a-z0-9]+/i)?.[0];
+  if (!id && msg) {
+    const raw = await connectorCall(READ_MESSAGE, { messageId: msg, reason: "Finds the conversation of a Front message pasted on a dashboard ticket." }, "Find the conversation of a Front message.").catch(() => "");
+    id = (parseJson(raw)?.conversationId as string | undefined) ?? raw.match(/cnv_[a-z0-9]+/i)?.[0] ?? null;
+  }
+  // A Front web link carries the conversation's number; its id is that number in base 36.
+  const num = !id && ref.match(/conversations?\/(\d+)/)?.[1];
+  if (num) id = `cnv_${Number(num).toString(36)}`;
+  if (!id) return { ok: false, error: "Paste a Front link, or an id that starts with cnv_ or msg_." };
+  await readThreadsBatch([id]).catch(() => 0);
+  const th = peekCache<BaMailThread>(`thread:${id}`);
+  if (!th) return { ok: false, error: `Front has no conversation ${id} that you can read.` };
+  const hidden = kv<Record<string, string[]>>("frontHidden", {})[url] ?? [];
+  if (hidden.includes(id)) mapPut("frontHidden", url, hidden.filter((x) => x !== id));
+  const last = th.entries.filter((e) => e.kind === "message" && e.at).pop();
+  await wbFrontUse(url, { id, subject: th.subject, status: null, from: null, emails: [], assignee: null, tags: [], snippet: null, updatedAt: last?.at ?? null, link: th.link || `https://app.frontapp.com/open/${id}` }, false);
   return { ok: true };
 }
 
@@ -438,7 +594,7 @@ async function findPeople(query: string): Promise<WbViewAs[]> {
 export async function wbRows(refresh: boolean): Promise<Cached<WbRow[]> & { mode: string; viewAs: WbViewAs | null }> {
   const t = await tickets(refresh);
   if (t.data) void syncSteps(refresh).catch(() => {});
-  if (t.data) void warmContacts(t.data).then(() => (!wbViewAs() && t.data ? autoFrontSearch(t.data) : undefined)).catch(() => {});
+  if (t.data && !IS_DEV_COPY) void warmContacts(t.data).then(() => (!wbViewAs() && t.data ? autoFrontSearch(t.data) : undefined)).catch(() => {});
   // Folders of tickets that already have a session get their name back on every read.
   for (const x of t.data ?? []) if (existsSync(join(WB_DIR, x.id))) labelFolderProject(join(WB_DIR, x.id), wbLabel(x));
   const pins = kv<Record<string, number>>("pins", {});
@@ -456,7 +612,7 @@ export async function wbRows(refresh: boolean): Promise<Cached<WbRow[]> & { mode
       const ref = sessions[x.url];
       const a = ref ? getAgent(ref.key) : null;
       const live = a && a.status !== "ended" && a.status !== "error" ? { key: a.key, status: a.status as string } : null;
-      return { ...x, steps: steps[x.url] ?? [], pinned: !!pins[x.url], state: states[x.url] ?? autoState(x), answered: answered[x.url] ?? null, proposal: proposals[x.url] ?? null, next: nexts[x.url] ?? null, stepsError: stepErrors[x.url]?.error ?? null, session: live, running: chains.has(x.url), contact: contactOf(x), frontAsk: frontAsks[x.url] ?? null, qai: (qaiWaits[x.url] ?? [])[0] ? { at: qaiWaits[x.url]![0]!.at, link: qaiWaits[x.url]![0]!.link } : null };
+      return { ...x, steps: steps[x.url] ?? [], pinned: !!pins[x.url], state: states[x.url] ?? autoState(x), answered: answered[x.url] ?? null, proposal: proposals[x.url] ?? null, next: nexts[x.url] ?? null, stepsError: stepErrors[x.url]?.error ?? null, session: live, running: chains.has(x.url), contact: contactOf(x), frontLinked: linkedThreads(x), frontAsk: askOf(x, frontAsks[x.url]), qai: (qaiWaits[x.url] ?? [])[0] ? { at: qaiWaits[x.url]![0]!.at, link: qaiWaits[x.url]![0]!.link } : null };
     }) ?? null;
   return { ...t, data, mode: wbMode(), viewAs: wbViewAs() };
 }
@@ -541,6 +697,7 @@ async function approveProposal(url: string) {
 // Steps that could not be saved (e.g. the database was not shared yet) are kept as the
 // proposal; try saving them again every 10 minutes, so they land once access is there.
 setInterval(() => {
+  if (IS_DEV_COPY) return;
   const errs = kv<Record<string, { at: number; error: string }>>("stepsError", {});
   const props = kv<Record<string, WbProposal>>("proposals", {});
   for (const [url, e] of Object.entries(errs)) {
@@ -549,9 +706,17 @@ setInterval(() => {
   }
 }, 10 * 60_000);
 
+// Once: the topic matcher replaces the old one, so its suggestions are rebuilt on the next round.
+setTimeout(() => {
+  if (IS_DEV_COPY || kv<boolean>("frontMatcherV3", false)) return;
+  kvSet("frontMatcherV3", true);
+  kvSet("frontAsk", {});
+  kvSet("frontAuto", {});
+}, 5_000);
+
 // Once: fill the Issue relation (step → engineering issue) on steps saved before it existed.
 setTimeout(async () => {
-  if (kv<boolean>("issueBackfill", false)) return;
+  if (IS_DEV_COPY || kv<boolean>("issueBackfill", false)) return;
   const todo = Object.entries(stepsMap()).flatMap(([url, steps]) => steps.filter((x) => x.url).map((x) => ({ page_id: x.url, command: "update_properties", properties: { Issue: [url] } })));
   if (!todo.length) return;
   let ok = 0;
@@ -566,6 +731,7 @@ setTimeout(async () => {
 
 // Step updates proposed before they needed no approval: save the ones still waiting, once.
 setTimeout(() => {
+  if (IS_DEV_COPY) return;
   // "Notion shows 10 of 12 steps" came from the read-back being cut at 100 rows, not from a failed save.
   for (const [url, e] of Object.entries(kv<Record<string, { error: string }>>("stepsError", {}))) if (/^Notion shows \d+ of \d+ steps after saving/.test(e.error)) mapPut("stepsError", url, null);
   const errs = kv<Record<string, unknown>>("stepsError", {});
@@ -788,7 +954,7 @@ async function pollQai() {
     qaiPolling = false;
   }
 }
-setInterval(() => void pollQai().catch(() => {}), 60_000);
+setInterval(() => void (IS_DEV_COPY ? null : pollQai().catch(() => {})), 60_000);
 
 // Resume (Home, sidebar) on a ticket's folder: resume it as the ticket's own session,
 // with the workbench tools, instead of a plain session beside the one the Workbench knows.
@@ -1080,6 +1246,8 @@ export async function handleWbRoute(req: Request, url: URL): Promise<Response | 
   if (p === "/api/ba/wb/front-search") return json(await wbFrontSearch(u).catch((e) => ({ threads: [], query: "", projectId: null, error: String(e?.message ?? e) })));
   if (p === "/api/ba/wb/front-use") return json(await wbFrontUse(u, b.thread as BaFrontThread));
   if (p === "/api/ba/wb/front-dismiss") return json(wbFrontDismiss(u));
+  if (p === "/api/ba/wb/front-set") return json(await wbFrontSet(u, (b.add ?? []) as BaFrontThread[], (b.remove ?? []) as string[]));
+  if (p === "/api/ba/wb/front-add") return json(await wbFrontAdd(u, String(b.ref ?? "")));
   if (p === "/api/ba/wb/viewas") {
     const v = b.viewAs as WbViewAs | null;
     kvSet("viewAs", v && /^[0-9a-f-]{32,36}$/i.test(v.id) ? { id: v.id, name: String(v.name).slice(0, 80), email: v.email ?? null } : null);
