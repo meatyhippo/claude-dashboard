@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import type { Cached } from "../shared/baCustomers.ts";
+import { directCall, directEnabled, prewarm, warmCall } from "./baConnectorFast.ts";
 import { claudeEnv, SCRATCH_DIR } from "./paths.ts";
 
 /**
@@ -27,12 +28,37 @@ let db: Database;
 
 export function initConnector(database: Database) {
   db = database;
+  // Connector sessions ready before the first page asks for data.
+  setTimeout(() => prewarm(), 3000);
   db.exec(`CREATE TABLE IF NOT EXISTS ba_cache (key TEXT PRIMARY KEY, json TEXT, error TEXT, fetched_at INTEGER NOT NULL);`);
 }
 
 /** One exact tool call; Haiku first, Sonnet if that fails. Returns the tool's raw result text. */
 export async function connectorCall(tool: string, input: unknown, reason: string): Promise<string> {
   mkdirSync(SCRATCH_DIR, { recursive: true });
+  // A tool's own error (a bad query, a missing page) is the answer: trying another way only repeats it.
+  const own = (e: any) => e?.toolError === true;
+  const t0 = Date.now();
+  const short = tool.replace(/^mcp__claude_ai_/, "");
+  if (directEnabled()) {
+    try {
+      const out = await directCall(tool, input);
+      console.log(`[connector] direct ${short} ${Date.now() - t0}ms`);
+      return out;
+    } catch (e) {
+      if (own(e)) throw e;
+      console.warn(`[connector] direct ${short} failed, using a session: ${(e as Error)?.message}`);
+    }
+  }
+  try {
+    const t1 = Date.now();
+    const out = unpersist(await warmCall(tool, input, reason));
+    console.log(`[connector] warm ${short} ${Date.now() - t1}ms`);
+    return out;
+  } catch (e) {
+    if (own(e)) throw e;
+    console.warn(`[connector] warm ${short} failed, using a new session: ${(e as Error)?.message}`);
+  }
   let lastError = "no result";
   for (const model of ["haiku", "sonnet"]) {
     try {
@@ -92,7 +118,8 @@ async function oneCallInner(model: string, tool: string, input: unknown, reason:
         if (c.type !== "tool_result" || !pending.has(c.tool_use_id)) continue;
         const text = typeof c.content === "string" ? c.content : (c.content ?? []).map((p: any) => p.text ?? "").join("");
         if (c.is_error) toolError = text;
-        else result = text;
+        // Read a result that was moved to a file now: the file goes when the session ends.
+        else result = unpersist(text);
       }
       if (result !== null) {
         // Got what we came for: stop rather than pay for the model's sign-off.
@@ -102,7 +129,7 @@ async function oneCallInner(model: string, tool: string, input: unknown, reason:
     }
   }
   if (result === null && toolError) throw new Error(toolError.slice(0, 500));
-  return result === null ? null : unpersist(result);
+  return result;
 }
 
 /**
@@ -110,9 +137,14 @@ async function oneCallInner(model: string, tool: string, input: unknown, reason:
  * ("<persisted-output> … Full output saved to: /path"). Read the file instead.
  */
 function unpersist(text: string): string {
-  if (!text.includes("<persisted-output>")) return text;
-  const path = text.match(/saved to:\s*(\S+\.(?:txt|json))/)?.[1];
-  if (!path || !existsSync(path)) return text;
+  // Two shapes: "<persisted-output> … saved to: /path" and, for a connector result over the token limit,
+  // "Error: result (N characters) exceeds maximum allowed tokens. Output has been saved to /path".
+  if (!text.includes("<persisted-output>") && !/exceeds maximum allowed tokens/.test(text.slice(0, 300))) return text;
+  const path = text.match(/saved to:?\s*(\/\S+?\.(?:txt|json))/)?.[1];
+  if (!path || !existsSync(path)) {
+    console.warn("[ba] large connector result could not be read back:", text.slice(0, 600));
+    return text;
+  }
   const body = readFileSync(path, "utf8");
   // Saved MCP results may be the content blocks rather than the text in them.
   const parsed = parseJson(body);

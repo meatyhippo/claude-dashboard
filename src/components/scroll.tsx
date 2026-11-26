@@ -22,7 +22,43 @@ export function useJumpToEnd(
     done.current = key;
     // Instant, and on the container only — scrollIntoView would drag the whole
     // window along with it.
-    return settleAtEnd(el);
+    const cancel = settleAtEnd(el);
+    // Earlier turns, draft cards and step lists load after this, growing the page
+    // above or below the view. Keep landing on the latest while it settles (a few
+    // seconds), unless the reader scrolls up themselves.
+    let left = false;
+    const leave = (e: Event) => {
+      if (e.type === "wheel" && (e as WheelEvent).deltaY > 0) return;
+      left = true;
+    };
+    const follow = () => {
+      if (!left) el.scrollTop = el.scrollHeight;
+    };
+    const ro = new ResizeObserver(follow);
+    for (const c of Array.from(el.children)) ro.observe(c);
+    const mo = new MutationObserver(() => {
+      for (const c of Array.from(el.children)) ro.observe(c);
+      follow();
+    });
+    mo.observe(el, { childList: true, subtree: true });
+    el.addEventListener("wheel", leave, { passive: true });
+    el.addEventListener("touchmove", leave, { passive: true });
+    el.addEventListener("keydown", leave);
+    el.addEventListener("mousedown", leave);
+    const stop = () => {
+      ro.disconnect();
+      mo.disconnect();
+      el.removeEventListener("wheel", leave);
+      el.removeEventListener("touchmove", leave);
+      el.removeEventListener("keydown", leave);
+      el.removeEventListener("mousedown", leave);
+    };
+    const timer = setTimeout(stop, 4000);
+    return () => {
+      cancel();
+      clearTimeout(timer);
+      stop();
+    };
   }, [ref, ready, key]);
 }
 

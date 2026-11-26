@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState, type ReactNode } from "react";
 import type { SessionDetail } from "../api.ts";
 import { REVEAL_ALL } from "../find.ts";
 import { ClaudeMark } from "./Icons.tsx";
@@ -85,7 +85,7 @@ export function Turn({ turn }: { turn: TurnRow }) {
   );
 }
 
-export function Transcript({ turns }: { turns: TurnRow[] }) {
+export function Transcript({ turns, inserts = [] }: { turns: TurnRow[]; /** Extra rows (e.g. draft links) placed by time between the turns. */ inserts?: { ts: number | null; node: ReactNode }[] }) {
   const [onlyPrompts, setOnlyPrompts] = useState(false);
   const shown = onlyPrompts ? turns.filter((t) => t.role === "user") : turns;
 
@@ -110,9 +110,13 @@ export function Transcript({ turns }: { turns: TurnRow[] }) {
         <div className="empty">Nothing recorded.</div>
       ) : (
         <div className="transcript-scroll">
-          {shown.map((t) => (
-            <Turn key={t.uuid} turn={t} />
+          {shown.map((t, n) => (
+            <Fragment key={t.uuid}>
+              {inserts.filter((x) => (x.ts ?? Infinity) <= (t.ts ?? 0) && (n === 0 || (x.ts ?? Infinity) > (shown[n - 1]!.ts ?? 0))).map((x, k) => <Fragment key={k}>{x.node}</Fragment>)}
+              <Turn turn={t} />
+            </Fragment>
           ))}
+          {inserts.filter((x) => (x.ts ?? Infinity) > (shown[shown.length - 1]?.ts ?? 0)).map((x, k) => <Fragment key={`end${k}`}>{x.node}</Fragment>)}
         </div>
       )}
     </>

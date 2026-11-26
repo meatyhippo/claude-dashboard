@@ -1,0 +1,1 @@
+Step names are short actions in plain words that start with a verb, 3 to 7 words, sentence case, for example "Create the SFTP connection", "Ask the customer for test files", "Send a test order", "Get the customer sign-off". No tool names, field names, ids, snake_case, brackets, slashes or jargon the customer would not use; put that detail in check.

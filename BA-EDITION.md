@@ -34,6 +34,7 @@ The edition reads through your **claude.ai connectors**, so connect these in cla
 | Customers from Notion | Projects read as customers; **My deals** and the deal directory on the Customers page; **Overview**, **Integration tickets** and **Front** tabs on a customer; an **IR workspace** per integration request |
 | Inbox triage | **Inbox** page: Front mail placed at customers and IRs (Front Link → tenant → learned contact/domain → Notion domain), with reply, Claude drafts and key points |
 | Delivery (IDM) | **Delivery** page: meetings, 2-week scoping window, billable pipeline, go-live watch, change requests, per customer |
+| Workbench | **Workbench** page: your engineering issues (Bugs and Feature development, "Me" view) as Scoping / Tasks / Change requests with Backlog / Current / Blocked stages, pins, Status written to Notion, State (Awaiting customer and an hourly Front check for replies), setup steps from the Workbench Steps database, **Start** per ticket (one Claude Code session per ticket) and the **Morning digest** |
 | Qai | **Qai** page, and Qai on customers and IRs: ask Qai in #ps_troubleshooting with tenant/IR/Front context, duplicate check, replies read back |
 | Calendar via Claude | Google Calendar through the claude.ai connector, read-only |
 | Run BA sessions in the cloud | Session buttons start a claude.ai/code cloud session; **Cloud / This Mac** switch beside the buttons |
@@ -53,7 +54,7 @@ The edition reads through your **claude.ai connectors**, so connect these in cla
 ## Files
 
 New code is in new files, so Rein's updates merge with few conflicts:
-`server/ba*.ts`, `shared/baCustomers.ts`, `shared/mailClean.ts`, `shared/qargoDiagram.ts`,
+`server/ba*.ts`, `server/wb.ts`, `server/wbRules/`, `shared/wb.ts`, `src/components/WorkbenchView.tsx`, `shared/baCustomers.ts`, `shared/mailClean.ts`, `shared/qargoDiagram.ts`,
 `src/baFlags.ts` and `src/components/` (`Agenda`, `BaEditionSettings`, `BaFilesBar`, `BaIcons`,
 `CustomerOverview`, `CustomerPanels`, `DeliveryView`, `DesktopWidgets`, `FeedbackMode`,
 `InboxView`, `MailComposer`, `MyDealsPanel`, `PublishedArtifacts`, `QaiPanel`,

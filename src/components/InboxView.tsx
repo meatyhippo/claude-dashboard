@@ -22,10 +22,12 @@ import { cleanMail } from "../../shared/mailClean.ts";
 
 type View = BaMailView;
 type Mail = Cached<BaTriageThread[]> & { seenIds: string[]; pending?: number };
-const VIEWS: { key: View; label: string; hint: string }[] = [
-  { key: "inbox", label: "Inbox", hint: "Open conversations assigned to you or in your inboxes" },
-  { key: "mentions", label: "Mentions", hint: "Conversations where you are @mentioned (last 60 days)" },
-  { key: "following", label: "Following", hint: "Open conversations in your Front sidebar you follow or are shared on, outside your own inbox" },
+const VIEWS: { key: View; label: string; hint: string; sub?: boolean }[] = [
+  { key: "inbox", label: "Open", hint: "Open conversations assigned to you or in your inboxes" },
+  { key: "assigned", label: "Assigned to me", hint: "Open conversations assigned to you (Front: assignee:me)", sub: true },
+  { key: "subscribed", label: "Subscribed", hint: "Open conversations you are subscribed to (Front: is:subscribed)", sub: true },
+  { key: "mentions", label: "Mentions", hint: "Conversations where you are @mentioned (open, last 14 days)" },
+  { key: "drafts", label: "Drafts", hint: "Your unsent Front drafts, including the ones Claude wrote in a chat" },
   { key: "placed", label: "Placed at customers", hint: "Everything already placed at one of your customers" },
 ];
 
@@ -63,6 +65,70 @@ function MessageBody({ text }: { text: string }) {
   );
 }
 
+/** Your unsent Front draft on this conversation: read it here, send it after seeing who gets it, or edit it in Front. */
+function DraftBox({ t, onSent }: { t: BaTriageThread; onSent: () => void }) {
+  const d = t.draft!;
+  const [full, setFull] = useState<{ text: string; to: string[] } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState(false);
+  const [state, setState] = useState<"idle" | "sending" | "sent">("idle");
+  const [more, setMore] = useState(true);
+  const box = useRef<HTMLDivElement>(null);
+  // The full text arrives after the thread: put the draft's start in view again once it has its height.
+  useEffect(() => {
+    if (full) box.current?.scrollIntoView({ block: "start" });
+  }, [full]);
+  useEffect(() => {
+    setFull(null);
+    setConfirm(false);
+    setState("idle");
+    void baApi.draft(d.id).then(setFull).catch((e) => setErr(String(e?.message ?? e)));
+  }, [d.id]);
+  const send = async () => {
+    setState("sending");
+    try {
+      await baApi.reply(t.id, { mode: "send", body: "", draftId: d.id });
+      setState("sent");
+      onSent();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+      setState("idle");
+    }
+  };
+  return (
+    <div className="mb-draftbox" ref={box}>
+      <div className="mb-draftbox-head">
+        <span className="mb-draft-tag">Your draft</span>
+        {full?.to.length ? <span className="ba-muted">to {full.to.join(", ")}</span> : null}
+        <a className="mb-draftbox-link front-btn" href={t.link} target="_blank" rel="noreferrer">Edit in Front ↗</a>
+      </div>
+      <div className={`mb-draftbox-text ${more ? "" : "clamp"}`}>{full ? cleanMail(full.text).text : d.preview}</div>
+      {!full && !err && (
+        <div className="mb-draftbox-loading" role="status">
+          <span className="mb-spin" aria-hidden="true" /> Loading the full draft…
+        </div>
+      )}
+      {full && cleanMail(full.text).text.length > 400 && (
+        <button className="link-btn" onClick={() => setMore(!more)}>{more ? "Show less" : "Show the whole draft"}</button>
+      )}
+      {err && <p className="ba-error">{err}</p>}
+      {state === "sent" ? (
+        <p className="ba-muted">Sent.</p>
+      ) : confirm ? (
+        <div className="ba-row">
+          <span>Send to {full?.to.join(", ") || "the original recipients"}?</span>
+          <button className="icon-btn wb-next" disabled={state === "sending"} onClick={() => void send()}>{state === "sending" ? "Sending…" : "Yes, send"}</button>
+          <button className="icon-btn ghost" onClick={() => setConfirm(false)}>Cancel</button>
+        </div>
+      ) : (
+        <div className="ba-row">
+          <button className="icon-btn" disabled={!full} onClick={() => setConfirm(true)}>Send this draft…</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Reader({
   t,
   customers,
@@ -80,6 +146,10 @@ export function Reader({
   const [thread, setThread] = useState<Cached<BaMailThread> | null>(null);
   const [busy, setBusy] = useState(false);
   const [mode, setMode] = useState<"reply" | "comment">("reply");
+  // A thread with a Front draft: the reply box folds to one line so the thread and the whole draft get the room.
+  const [composeOpen, setComposeOpen] = useState(false);
+  useEffect(() => setComposeOpen(false), [t.id]);
+  const folded = !!t.draft && !composeOpen;
   const composer = useRef<ComposerHandle>(null);
   const [empty, setEmpty] = useState(true);
   const [draft, setDraft] = useState<{ id: string; to: string[] } | null>(null);
@@ -168,8 +238,11 @@ export function Reader({
   }, [t.id, placedAt, thread]);
   const bottom = useRef<HTMLDivElement>(null);
   // Braces matter: scrollIntoView returns a Promise in current browsers, and an effect must not return one.
+  // With a draft, land on the draft's first line (the last email sits right above it), not on its end.
   useEffect(() => {
-    bottom.current?.scrollIntoView({ block: "end" });
+    const d = bottom.current?.parentElement?.querySelector(".mb-draftbox");
+    if (d) d.scrollIntoView({ block: "start" });
+    else bottom.current?.scrollIntoView({ block: "end" });
   }, [thread]);
 
   const submit = async (kind: "draft" | "review" | "comment") => {
@@ -222,7 +295,7 @@ export function Reader({
         <h2>{th?.subject ?? t.subject}</h2>
         <div className="ba-muted">{[t.from, th?.assignee ? `assigned to ${th.assignee}` : t.assignee, ...(th?.inboxes ?? [])].filter(Boolean).join(" · ")}</div>
         <div className="mb-actions">
-          <a className="icon-btn ghost" href={t.link} target="_blank" rel="noreferrer">
+          <a className="icon-btn ghost front-btn" href={t.link} target="_blank" rel="noreferrer">
             Open in Front ↗
           </a>
           <button className="icon-btn ghost" onClick={() => void load(true)} disabled={busy}>
@@ -410,10 +483,16 @@ export function Reader({
             </div>
           ),
         )}
+        {t.draft && <DraftBox t={t} onSent={() => void load(true)} />}
         <div ref={bottom} />
         </div>
       </div>
 
+      {folded ? (
+        <div className="mb-compose folded">
+          <button className="icon-btn ghost" onClick={() => setComposeOpen(true)}>Write a different reply or a comment</button>
+        </div>
+      ) : (
       <div className={`mb-compose ${mode}`}>
         <div className="ba-seg" role="tablist">
           <button role="tab" aria-selected={mode === "reply"} className={mode === "reply" ? "on" : ""} onClick={() => setMode("reply")}>
@@ -480,6 +559,7 @@ export function Reader({
         )}
         {error && <div className="chat-error">{error}</div>}
       </div>
+      )}
     </div>
   );
 }
@@ -509,12 +589,44 @@ export default function InboxView({ onOpen }: { onOpen: (key: string) => void })
   useEffect(() => {
     if (!byView[view]) void load(view, false);
   }, [view, byView, load]);
+  // Front shows a count on every folder at once; read the other folders' lists quietly.
+  useEffect(() => {
+    for (const v of ["assigned", "subscribed", "mentions", "drafts"] as View[])
+      void baApi
+        .mail(v, false)
+        .then((r) => setByView((m) => (m[v] ? m : { ...m, [v]: r })))
+        .catch(() => {});
+  }, []);
   // While conversations are still being read in the background, check back so senders and placements fill in.
   useEffect(() => {
     if (!byView[view]?.pending) return;
     const id = setTimeout(() => void load(view, false), 20_000);
     return () => clearTimeout(id);
   }, [view, byView, load]);
+
+  // "Open draft in Inbox" from a chat: jump to Drafts with that conversation selected.
+  useEffect(() => {
+    const take = () => {
+      let want: { view?: View; id?: string } | null = null;
+      try {
+        want = JSON.parse(sessionStorage.getItem("inbox-open") || "null");
+        sessionStorage.removeItem("inbox-open");
+      } catch {
+        /* storage blocked */
+      }
+      if (!want?.id) return;
+      setCustomerFilter(null);
+      setQ("");
+      if (want.view) {
+        setView(want.view);
+        void load(want.view, true);
+      }
+      setSelected(want.id);
+    };
+    take();
+    window.addEventListener("inbox-open", take);
+    return () => window.removeEventListener("inbox-open", take);
+  }, [load]);
 
   const mail = byView[view];
   const seen = new Set(mail?.seenIds ?? []);
@@ -573,7 +685,7 @@ export default function InboxView({ onOpen }: { onOpen: (key: string) => void })
     <div className="page mb">
       <aside className="mb-folders">
         {VIEWS.map((v) => (
-          <button key={v.key} className={`mb-folder ${view === v.key && customerFilter === null ? "on" : ""}`} title={v.hint} onClick={() => (setView(v.key), setCustomerFilter(null))}>
+          <button key={v.key} className={`mb-folder ${v.sub ? "sub" : ""} ${view === v.key && customerFilter === null ? "on" : ""}`} title={v.hint} onClick={() => (setView(v.key), setCustomerFilter(null))}>
             <span>{v.label}</span>
             {counts(v.key) !== undefined && <em>{counts(v.key)}</em>}
           </button>
@@ -626,7 +738,7 @@ export default function InboxView({ onOpen }: { onOpen: (key: string) => void })
                   <span className="mb-time">{when(t.updatedAt)}</span>
                 </div>
                 <div className="mb-subject">{t.subject}</div>
-                {t.snippet && <div className="mb-snippet">{t.snippet}</div>}
+                {t.draft ? <div className="mb-snippet"><span className="mb-draft-tag">Draft</span> {t.draft.preview.slice(0, 180)}</div> : t.snippet && <div className="mb-snippet">{cleanMail(t.snippet).text.replace(/\s+/g, " ").slice(0, 180)}</div>}
                 <div className="mb-tags">
                   {t.link_ ? (
                     <span className="ba-chip" title={t.link_.source === "auto" ? "Placed automatically" : undefined}>

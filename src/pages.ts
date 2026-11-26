@@ -6,7 +6,7 @@ import { baFlags, baPageOn, T } from "./baFlags.ts";
  * turns them off — a page hidden in settings has to disappear from all three, and
  * three separate lists drifted apart the moment one gained a page.
  */
-export type Tab = "desktop" | "live" | "inbox" | "delivery" | "projects" | "tasks" | "calendar" | "history" | "artifacts" | "drawings" | "notes" | "worktrees" | "services" | "qai" | "templates" | "reviews" | "usage" | "settings";
+export type Tab = "desktop" | "live" | "inbox" | "delivery" | "workbench" | "projects" | "tasks" | "calendar" | "history" | "artifacts" | "drawings" | "notes" | "worktrees" | "services" | "qai" | "templates" | "reviews" | "usage" | "settings";
 
 export type PageDef = {
   key: Tab;
@@ -26,6 +26,7 @@ export const PAGES: PageDef[] = [
   { key: "live", label: "Home", hint: "what needs you, what is running, and your day", fixed: true },
   { key: "inbox", label: "Inbox", hint: "your open Front conversations, placed at customers and IRs" },
   { key: "delivery", label: "Delivery", hint: "IDM view: meetings, scoping window, billable pipeline, go-live" },
+  { key: "workbench", label: "Workbench", hint: "Your integration tickets: steps, Start, morning digest" },
   { key: "projects", label: T.Projects, hint: baFlags.customers ? "every customer, current and archived" : "every piece of work, current and archived" },
   { key: "tasks", label: "Tasks", hint: "your to-dos, with dates and projects" },
   { key: "calendar", label: "Calendar", hint: "your calendar events beside your tasks" },

@@ -19,6 +19,8 @@ import { ProjectIcon } from "./ProjectMark.tsx";
 import { buildTree, STATUS_LABEL, type SidebarSession } from "./sidebar/sessions.ts";
 import { dayLabel, TaskQuickAdd } from "./tasks/TaskQuickAdd.tsx";
 import { TodayMeetings } from "./tasks/TasksView.tsx";
+import { WbDigestCard } from "./WorkbenchView.tsx";
+import { baFlags } from "../baFlags.ts";
 
 const UPCOMING_SHOWN = 8;
 const REVIEWS_SHOWN = 4;
@@ -26,27 +28,46 @@ const REVIEWS_SHOWN = 4;
 type Place = { project: Project | null; projectName: string; workspace: Workspace | null };
 
 /** One session or terminal as a row: what it is, where it runs, and how it is doing. */
+/**
+ * A session title without what its group header already says. Workbench titles
+ * are "<customer> · <ticket>", and the group is the ticket: keep the customer.
+ */
+function shortTitle(title: string, group?: string): string {
+  if (!group) return title;
+  const g = group.trim();
+  const parts = title.split(" · ").map((x) => x.trim()).filter((x) => x && x !== g && !g.startsWith(x.replace(/…$|\.\.\.$/, "")));
+  const out = parts.join(" · ");
+  return out || title;
+}
+
 function SessionLine({
   s,
   where,
   action,
   onOpen,
+  group,
 }: {
   s: SidebarSession;
+  /** The group it sits under: its name is dropped from the title so it is not said twice. */
+  group?: string;
   /** Shown after the title when the row is not already under its project. */
   where?: string | null;
   action?: React.ReactNode;
   onOpen: (id: string, opts?: OpenOpts) => void;
 }) {
   const state = s.why ?? STATUS_LABEL[s.status];
+  // Plain words only: no folder ids, model names or paths. Scratch folders are quick chats.
+  const raw = shortTitle(s.title, group);
+  const title = /^scratch-[a-z0-9]+$/i.test(raw) ? "Quick chat" : raw;
+  const place = where && !/^[0-9a-f]{24,}$/i.test(where.trim()) && !/^scratch-[a-z0-9]+$/i.test(where.trim()) ? where : null;
   return (
     <div className={`home-row home-${s.status}`}>
-      <button className="home-row-main" {...openable((opts) => onOpen(s.id, opts))} title={s.cwd}>
+      <button className="home-row-main" {...openable((opts) => onOpen(s.id, opts))}>
         <span className={`ws-mark${s.service ? ` ws-mark-service svc-${s.health ?? "ok"}` : s.terminal ? "" : ` ws-mark-${s.status}`}`}>{s.service ? <ServiceIcon /> : s.terminal ? <TerminalIcon /> : <ClaudeMark />}</span>
         <span className="home-row-text">
-          <span className="home-row-title">{s.title}</span>
+          <span className="home-row-title">{title}</span>
           <span className="home-row-sub">
-            {[where, s.service ? (s.why ?? "Service running") : s.terminal ? "Terminal" : state, s.model || null, s.external && !s.terminal ? "started in a terminal, read-only here" : null]
+            {[place, s.service ? (s.why ?? "Service running") : s.terminal ? "Terminal" : state]
               .filter(Boolean)
               .join(" · ")}
           </span>
@@ -229,6 +250,13 @@ export function HomeView({
             )}
             {live.map(({ p, cards }) => {
               const project = projects.find((x) => x.id === p.id) ?? null;
+              const only = cards.length === 1 && cards[0]!.rows.length === 1 && !(cards[0]!.c.ws && !cards[0]!.c.bare) ? cards[0]!.rows[0]! : null;
+              // One session under its own header said the same thing twice: show it once.
+              if (only) return (
+                <div key={p.key} className="home-project home-project-single">
+                  <SessionLine s={only} onOpen={onOpen} />
+                </div>
+              );
               return (
                 <div key={p.key} className="home-project">
                   <button className="home-project-head" disabled={p.id === null} onClick={() => p.id !== null && onOpenProject(p.id)} title="Open this project">
@@ -244,7 +272,7 @@ export function HomeView({
                         </button>
                       )}
                       {rows.map((s) => (
-                        <SessionLine key={s.id} s={s} onOpen={onOpen} />
+                        <SessionLine key={s.id} s={s} group={p.name} onOpen={onOpen} />
                       ))}
                     </div>
                   ))}
@@ -282,11 +310,12 @@ export function HomeView({
                   <SessionLine
                     key={s.id}
                     s={s}
+                    group={g.name}
                     where={placeOf.get(s.id)?.workspace?.repoName ?? null}
                     onOpen={onOpen}
                     action={
                       <span className="home-row-actions">
-                        <button className="icon-btn tiny" onClick={() => void agentApi.restore(s.id).catch(() => {})} title="Start it again on the same conversation">
+                        <button className="icon-btn tiny" onClick={() => void agentApi.restore(s.id).then(() => onOpen(s.id)).catch(() => {})} title="Start it again on the same conversation and open it">
                           <PlayIcon /> Resume
                         </button>
                         <button className="icon-btn tiny square" onClick={() => void agentApi.forget(s.id).catch(() => {})} title="Take it off this list. The transcript stays in History." aria-label={`Forget ${s.title}`}>
@@ -339,6 +368,7 @@ export function HomeView({
             )}
           </section>
           <TodayMeetings today={today} hidden={calendarHidden} onOpenCalendar={() => onGo("calendar")} />
+          {baFlags.workbench && <WbDigestCard />}
         </div>
       </div>
 

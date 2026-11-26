@@ -1,5 +1,6 @@
 import { createRoot } from "react-dom/client";
 import App from "./App.tsx";
+import { SignInGate } from "./components/ClaudeSignIn.tsx";
 import "./styles.css";
 import { installWindowActivity } from "./windowActivity.ts";
 
@@ -14,4 +15,8 @@ if ("dashboardShell" in window) {
 }
 installWindowActivity();
 
-createRoot(document.getElementById("root")!).render(<App />);
+createRoot(document.getElementById("root")!).render(
+  <SignInGate>
+    <App />
+  </SignInGate>,
+);

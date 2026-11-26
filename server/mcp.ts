@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import { claudeEnv, DATA_DIR } from "./paths.ts";
 
 /**
@@ -123,7 +124,7 @@ export function parseMcpList(out: string): McpServer[] {
  * bare name.
  */
 let cachedBin: string | null = null;
-function claudeBin(): string {
+export function claudeBin(): string {
   if (cachedBin) return cachedBin;
   const candidates = [
     process.env.CLAUDE_BIN,
@@ -131,7 +132,14 @@ function claudeBin(): string {
     "/opt/homebrew/bin/claude",
     "/usr/local/bin/claude",
   ].filter((c): c is string => Boolean(c));
-  cachedBin = candidates.find((c) => existsSync(c)) ?? "claude";
+  // Last, the Claude Code bundled with the app: a colleague may have no other.
+  let bundled: string | null = null;
+  try {
+    bundled = join(dirname(createRequire(import.meta.url).resolve("@anthropic-ai/claude-agent-sdk-darwin-arm64/package.json")), "claude");
+  } catch {
+    /* another platform */
+  }
+  cachedBin = [...candidates, bundled].find((c): c is string => !!c && existsSync(c)) ?? "claude";
   return cachedBin;
 }
 

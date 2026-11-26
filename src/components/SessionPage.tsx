@@ -1,3 +1,4 @@
+import { WbChatNext, WbSessionSteps, wbTicketIdOf } from "./WorkbenchView.tsx";
 import SessionContextPane from "./SessionContextPane.tsx";
 import { baFlags } from "../baFlags.ts";
 import DataShaperPanel from "./DataShaperPanel.tsx";
@@ -215,13 +216,14 @@ export function SessionPage({
                 settings={settings}
                 onSettings={onSettings}
                 onGone={onBack}
+                footer={baFlags.workbench && wbTicketIdOf(cwd) ? <WbChatNext cwd={cwd} /> : undefined}
               />
             </div>
           )}
         </div>
 
         {/* BA edition: the mail, ticket and files this session works on, beside the chat */}
-        {baFlags.customers && <SessionContextPane sessionId={id} agentKey={agent?.key ?? null} cwd={cwd} wide />}
+        {baFlags.workbench && wbTicketIdOf(cwd) ? <WbSessionSteps cwd={cwd} /> : baFlags.customers && <SessionContextPane sessionId={id} agentKey={agent?.key ?? null} cwd={cwd} wide />}
 
         {details && (
         <div className="page-side session-details">

@@ -6,6 +6,8 @@ import { isTerminalKey } from "../../shared/terminals.ts";
 import { useEffect, useRef, useState } from "react";
 import type { AgentSummary, Settings } from "../api.ts";
 import { SessionPanelContent } from "./SessionPanelContent.tsx";
+import { wbTicketIdOf } from "./WorkbenchView.tsx";
+import { baFlags } from "../baFlags.ts";
 
 const DRAWER_WIDTH_KEY = "drawer-width";
 const DRAWER_MIN_WIDTH = 420;
@@ -17,15 +19,20 @@ function drawerMaxWidth(): number {
   return Math.round(window.innerWidth * DRAWER_MAX_FRACTION);
 }
 
-function defaultDrawerWidth(): number {
-  return Math.min(820, drawerMaxWidth());
+// A Workbench ticket puts its steps beside the chat, so it gets its own, much wider
+// width: the chat keeps a readable column and the steps still fit next to it.
+const WB_DRAWER_WIDTH_KEY = "drawer-width-wb";
+const WB_DRAWER_DEFAULT = 1400;
+
+function defaultDrawerWidth(wide = false): number {
+  return Math.min(wide ? WB_DRAWER_DEFAULT : 820, drawerMaxWidth());
 }
 
-function readDrawerWidth(): number {
-  const saved = Number(localStorage.getItem(DRAWER_WIDTH_KEY));
+function readDrawerWidth(wide = false): number {
+  const saved = Number(localStorage.getItem(wide ? WB_DRAWER_WIDTH_KEY : DRAWER_WIDTH_KEY));
   return Number.isFinite(saved) && saved >= DRAWER_MIN_WIDTH
     ? Math.min(saved, drawerMaxWidth())
-    : defaultDrawerWidth();
+    : defaultDrawerWidth(wide);
 }
 
 /**
@@ -43,8 +50,10 @@ function readDrawerWidth(): number {
  * putting the handle at the width it no longer actually has, off over the
  * backdrop instead of on the drawer's real edge.
  */
-function useDrawerWidth() {
-  const [width, setWidth] = useState<number>(readDrawerWidth);
+function useDrawerWidth(wide = false) {
+  const [width, setWidth] = useState<number>(() => readDrawerWidth(wide));
+  // The agent (and so whether this is a Workbench ticket) can arrive after the first render.
+  useEffect(() => setWidth(readDrawerWidth(wide)), [wide]);
   const [maxWidth, setMaxWidth] = useState<number>(drawerMaxWidth);
   const dragging = useRef(false);
 
@@ -80,7 +89,7 @@ function useDrawerWidth() {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem(DRAWER_WIDTH_KEY, String(width));
+    localStorage.setItem(wide ? WB_DRAWER_WIDTH_KEY : DRAWER_WIDTH_KEY, String(width));
   }, [width]);
 
   const clampedWidth = Math.min(width, maxWidth);
@@ -109,7 +118,7 @@ export function SessionDrawer({
   onClose: () => void;
 }) {
   const aside = useRef<HTMLElement | null>(null);
-  const { width, startDrag } = useDrawerWidth();
+  const { width, startDrag } = useDrawerWidth(baFlags.workbench && !!wbTicketIdOf(agent?.cwd));
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();

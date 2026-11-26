@@ -16,7 +16,7 @@ const TEST = /__(?:internal_)?datafetchershaper_transform_document$/;
 const READ = /__(?:internal_)?datafetchershaper_(?:get|list)_(?:global_)?transformation_mappings?$/;
 const serverOf = (tool: string) => tool.match(/^mcp__(?:claude_ai_)?(.+?)__/)?.[1] ?? "qargo-mcp";
 
-function transcriptPath(sessionId: string): string | null {
+export function transcriptPath(sessionId: string): string | null {
   if (!/^[\w-]{8,}$/.test(sessionId)) return null;
   const root = PROJECTS_DIR;
   for (const d of readdirSync(root)) {

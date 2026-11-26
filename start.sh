@@ -33,7 +33,7 @@ if [ ! -d node_modules ]; then
 fi
 
 # A stale process holding the API port would leave the UI proxying into the void.
-if lsof -ti tcp:"$API_PORT" >/dev/null 2>&1; then
+if lsof -ti tcp:"$API_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
   echo "!  port $API_PORT is already in use — is the dashboard already running?"
   echo "   free it with: kill \$(lsof -ti tcp:$API_PORT)"
   exit 1

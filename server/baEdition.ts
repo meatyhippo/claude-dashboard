@@ -4,6 +4,7 @@ import { DEFAULT_BA_FLAGS, type BaFlags } from "../shared/baCustomers.ts";
 import { blankSchedule, blankTemplate, type Template } from "../shared/templates.ts";
 import { DATA_DIR } from "./paths.ts";
 import { getSettings, updateSettings } from "./settings.ts";
+import { skillsPlugin } from "./agents.ts";
 
 /**
  * BA edition: the dashboard set up for a solution architect / business analyst
@@ -142,7 +143,17 @@ export function mailStyleBlock(): string {
   } catch {
     /* unreadable: the dashboard's own copy still applies */
   }
+  let skill = "";
+  try {
+    const dir = skillsPlugin();
+    const f = dir && join(dir, "skills", "my-writing-style", "SKILL.md");
+    if (f && existsSync(f)) skill = readFileSync(f, "utf8").replace(/^---[\s\S]*?---\s*/, "").trim().slice(0, 12000);
+  } catch {
+    /* no skill synced: the rest still applies */
+  }
   const parts = [
+    "Never end the draft with a sign-off (\"Kind regards\", \"Best\", \"Thanks\" as a closing line) or my name: Front adds my signature, so the draft ends with its last sentence.",
+    skill && `My writing style (the my-writing-style skill, follow it):\n${skill}`,
     own && `How I want my emails written (these win over any default):\n${own}`,
     global && `My general instructions for Claude (follow the parts about writing):\n${global}`,
   ].filter(Boolean);
