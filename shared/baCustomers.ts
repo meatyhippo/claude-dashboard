@@ -80,6 +80,8 @@ export type BaFrontThread = {
   link: string;
   /** In the Drafts view: your unsent Front draft on this conversation. */
   draft?: { id: string; preview: string } | null;
+  /** Who wrote the last message: "us" (replied, waiting on them) or "them" (needs a reply). Known once the timeline is read. */
+  lastBy?: "us" | "them" | null;
 };
 
 export type BaSuggestion = { projectId: number; irUrl: string | null; irTitle: string | null; reason: string; score: number };
@@ -324,9 +326,11 @@ export type BaFlags = {
   cloudSessions: boolean;
   /** Experimental: Notion / Front / Slack reads go straight to the claude.ai connector, without a Claude session. */
   directConnectors: boolean;
+  /** Send a session to a colleague over Slack, and import one they sent. */
+  handoff: boolean;
 };
 
-export const DEFAULT_BA_FLAGS: BaFlags = { enabled: false, feedback: false, customers: true, inbox: true, delivery: true, workbench: true, qai: true, diagrams: true, published: true, qargoMcp: true, calendar: true, cloudSessions: false, directConnectors: false };
+export const DEFAULT_BA_FLAGS: BaFlags = { enabled: false, feedback: false, customers: true, inbox: true, delivery: true, workbench: true, qai: true, diagrams: true, published: true, qargoMcp: true, calendar: true, cloudSessions: false, directConnectors: false, handoff: true };
 
 export const BA_FLAG_INFO: { key: Exclude<keyof BaFlags, "enabled">; label: string; hint: string }[] = [
   { key: "customers", label: "Customers from Notion", hint: "Projects become customers: My deals, Requirements and Front tabs, IR workspaces" },
@@ -340,6 +344,7 @@ export const BA_FLAG_INFO: { key: Exclude<keyof BaFlags, "enabled">; label: stri
   { key: "diagrams", label: "Qargo diagrams", hint: "Excalidraw styleguide: landscape template, shape library, style check, customer export" },
   { key: "published", label: "Published artifacts", hint: "Your claude.ai artifacts beside the local ones and on customer pages" },
   { key: "directConnectors", label: "Direct connector calls (experimental)", hint: "Notion, Front and Slack reads go straight to your claude.ai connectors with Claude Code's sign-in, without a Claude session: about 1 s instead of 3 to 20 s. Uses an undocumented connection that a Claude Code update can break; any failure falls back to the normal way" },
+  { key: "handoff", label: "Session handoff", hint: "Send a session to a colleague in a Slack DM from its ⋮ menu; they import it from History and carry on" },
   { key: "feedback", label: "Feedback mode", hint: "A Feedback button that pins notes to any part of the page, saved for the next round of changes" },
 ];
 
@@ -414,3 +419,22 @@ export type BaSavedFiles = { dir: string; saved: string[]; skipped: number } | n
 // ── Slack, on the customer page ──────────────────────────────────────────────
 
 export type BaSlackPost = { author: string; text: string; at: string | null; fromQai: boolean };
+
+/** Which model each kind of background work uses, and how often the mailbox refreshes. */
+export type BaModel = "haiku" | "sonnet" | "opus";
+export type BaModels = {
+  /** Connector reads (Notion, Front, Slack, Calendar): one exact tool call each. */
+  sync: BaModel;
+  /** Retry a failed read once on Sonnet. */
+  syncFallback: boolean;
+  /** Key points of a mail thread. */
+  keyPoints: BaModel;
+  /** "Draft with Claude" replies in the Inbox. */
+  drafts: BaModel;
+  /** Sessions started from BA buttons; "default" uses your Claude Code default. */
+  sessions: BaModel | "default";
+  /** Minutes between background mailbox refreshes; 0 is only when you open the Inbox. */
+  refreshMinutes: number;
+};
+export const DEFAULT_BA_MODELS: BaModels = { sync: "haiku", syncFallback: true, keyPoints: "haiku", drafts: "sonnet", sessions: "default", refreshMinutes: 10 };
+export const BA_REFRESH_CHOICES = [0, 5, 10, 30, 60];

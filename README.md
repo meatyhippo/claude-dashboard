@@ -11,8 +11,40 @@ the ones Claude Code itself makes.
 
 ## Quick start
 
+This is Qargo's BA edition of [Rein Vanbelleghem's Claude Dashboard](https://github.com/ReinVanbelleghem/claude-dashboard);
+what it adds is in [BA-EDITION.md](BA-EDITION.md).
+
+### Install on a Mac, nothing else needed
+
+Paste this into Terminal (Apple silicon Macs, macOS 13 or later):
+
 ```bash
-git clone https://github.com/ReinVanbelleghem/claude-dashboard.git
+curl -fsSL https://raw.githubusercontent.com/MathijsRochus/claude-dashboard/qargo-ba-edition/get.sh | bash
+```
+
+No git, Homebrew, Node or Bun. It installs Claude Code with Anthropic's installer if you
+don't have it and signs you in, downloads the app (built by GitHub from this repository)
+into `/Applications`, and asks how you want to use it:
+
+| | what you get |
+| --- | --- |
+| **App** | "Claude Dashboard" with its own window and Dock icon |
+| **Browser** | a tab at **http://localhost:5757**; the dashboard starts by itself when you log in |
+
+Both are the same dashboard with the same data in `~/.claude-dashboard`: the app's window
+shows that page, and you can switch by running the line again. **To update, run the same
+line again.** It asks before it stops a running dashboard, since that ends its sessions
+(they stay in History, to resume). Skip the questions with `… | bash -s -- --app` or
+`--browser`, and `--yes`.
+
+To remove it: delete the app, and in browser mode also
+`launchctl bootout gui/$(id -u)/com.qargo.claude-dashboard; rm ~/Library/LaunchAgents/com.qargo.claude-dashboard.plist`.
+Your data stays in `~/.claude-dashboard` until you delete that too.
+
+### From source (developers)
+
+```bash
+git clone https://github.com/MathijsRochus/claude-dashboard.git
 cd claude-dashboard
 ./install.sh
 ```
@@ -603,13 +635,30 @@ prints what it loaded on startup:
 [claude-dashboard] budgets: 35M per 5h, 700M per week, $250/day (fresh tokens; edit config.json to tune)
 ```
 
+### Two Claude accounts
+
+Claude Code keeps a second account apart by `CLAUDE_CONFIG_DIR`, usually through a
+shell alias such as `wclaude() { CLAUDE_CONFIG_DIR=~/.claude-work command claude "$@"; }`.
+The Mac app never sees your shell, so tell the dashboard which profile to follow under
+**Settings → Sessions → Claude Code profile** (`ui.claudeHome` in `settings.json`), then
+restart it. Sessions it starts run on that profile too, and the panel shows which
+folder is in use.
+
+One dashboard follows one profile. To watch the other at the same time, run a second
+one beside it with its own ports and data:
+
+```bash
+CLAUDE_HOME=~/.claude bun run dev:beside    # http://localhost:5768
+```
+
 ### Environment variables
 
 | variable | default | purpose |
 | --- | --- | --- |
 | `PORT` | `5757` | Daemon port |
 | `DASHBOARD_HOME` | `~/.claude-dashboard` | Where the dashboard keeps its own state |
-| `CLAUDE_HOME` | `~/.claude` | Claude Code's state. **Only ever read** |
+| `CLAUDE_HOME` | `~/.claude` | Claude Code's state. **Only read**, except that importing a session adds its transcript here. Overrides everything below |
+| `CLAUDE_CONFIG_DIR` | unset | Claude Code's own variable for a second account; followed when `CLAUDE_HOME` is unset |
 | `ARTIFACT_PORT` | `5759` | Port generated artifacts are served from, deliberately not the API's |
 | `CLAUDE_ARTIFACTS_DIR` | `~/Notes/artifacts` | Default artifact folder. Settings → Artifacts overrides it, and wins once set |
 | `DASHBOARD_WATCH` | unset | `1` restarts the daemon on server file changes — see below |

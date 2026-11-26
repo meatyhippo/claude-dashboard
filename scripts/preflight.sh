@@ -43,16 +43,28 @@ ensure_bun_on_path() {
 
 # ── required / optional dependency probes ─────────────────────────────────────
 # Each returns 0 when satisfied. They print nothing, so callers decide the tone.
+
+# A fresh Mac has /usr/bin/git and /usr/bin/python3, but only as stubs: running
+# one opens the "install the command line developer tools" dialog instead. They
+# count only once those tools are there (or when another git/python3 comes first).
+real_tool() {
+  local p
+  p="$(command -v "$1" 2>/dev/null)" || return 1
+  [ "$OS" != macos ] || [ "$p" != "/usr/bin/$1" ] || xcode-select -p >/dev/null 2>&1
+}
 has_bun()    { ensure_bun_on_path; have bun; }
-has_git()    { have git; }
+has_git()    { real_tool git; }
 has_claude() { have claude; }
 has_notifier() { have terminal-notifier; }
 # The Services page: tmux runs the stack, python3 brokers the browser terminal
 # (bun cannot open a pty itself), docker lists and drives compose containers.
 has_tmux()    { have tmux; }
-has_python3() { have python3; }
+has_python3() { real_tool python3; }
 has_docker()  { have docker && docker compose version >/dev/null 2>&1; }
-has_claude_home() { [ -d "${CLAUDE_HOME:-$HOME/.claude}" ]; }
+# Same order as server/paths.ts, minus the saved setting: CLAUDE_HOME, then
+# CLAUDE_CONFIG_DIR (a second Claude account), then the default profile.
+claude_home() { echo "${CLAUDE_HOME:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}"; }
+has_claude_home() { [ -d "$(claude_home)" ]; }
 
 port_busy() {
   have lsof || return 1   # no lsof: assume free rather than block the install
@@ -64,14 +76,14 @@ BUN_INSTALL_CMD='curl -fsSL https://bun.sh/install | bash'
 
 git_install_hint() {
   case "$OS" in
-    macos) echo "xcode-select --install    # or: brew install git" ;;
+    macos) echo "xcode-select --install    # Apple's developer tools, which include git" ;;
     linux) echo "sudo apt install git      # or your distro's package manager" ;;
     *)     echo "https://git-scm.com/downloads" ;;
   esac
 }
 
 claude_install_hint() {
-  echo "npm install -g @anthropic-ai/claude-code    # then run: claude"
+  echo "curl -fsSL https://claude.ai/install.sh | bash    # then: claude auth login"
 }
 
 tmux_install_hint() {

@@ -10,6 +10,8 @@ import {
   type SessionRow,
 } from "../api.ts";
 import { Select } from "./Select.tsx";
+import { ImportSessionButton } from "./SessionTransfer.tsx";
+import { baFlags } from "../baFlags.ts";
 
 /**
  * SQLite marks the matched terms with ⟪ ⟫ rather than HTML, so the snippet can be
@@ -127,7 +129,10 @@ export function HistoryView({
 
   return (
     <div className="panel">
-      <h2>Session history</h2>
+      <div className="history-head">
+        <h2>Session history</h2>
+        {baFlags.handoff && <ImportSessionButton onOpen={onOpen} />}
+      </div>
       <p className="hint">
         Full-text search across all projects — over the prompts you typed, the replies you got
         back, or both. Click a row for the transcript summary.

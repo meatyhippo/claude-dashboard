@@ -145,6 +145,12 @@ export type Settings = {
     /** Where a new project's folder is made. Empty means the built-in default, ~/projects. */
     projectsRoot?: string;
     /**
+     * The Claude Code profile to follow, as CLAUDE_CONFIG_DIR would name it. Empty
+     * means ~/.claude. Read once at boot by paths.ts, so a change takes a restart;
+     * CLAUDE_HOME or CLAUDE_CONFIG_DIR in the daemon's env override it.
+     */
+    claudeHome?: string;
+    /**
      * Dock pages turned off, by key. Absent means every page is on, so a page added
      * later arrives visible rather than silently hidden by an older settings file.
      */
@@ -346,6 +352,7 @@ const DEFAULTS: Settings = {
     drawingsRoot: "",
     notesRoot: "",
     projectsRoot: "",
+    claudeHome: "",
     hiddenPages: [],
     pageOrder: [],
     footerPages: ["settings"],

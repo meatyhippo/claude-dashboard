@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { getBaModels } from "./baEdition.ts";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import type { Cached } from "../shared/baCustomers.ts";
 import { directCall, directEnabled, prewarm, warmCall } from "./baConnectorFast.ts";
@@ -33,7 +34,31 @@ export function initConnector(database: Database) {
   db.exec(`CREATE TABLE IF NOT EXISTS ba_cache (key TEXT PRIMARY KEY, json TEXT, error TEXT, fetched_at INTEGER NOT NULL);`);
 }
 
-/** One exact tool call; Haiku first, Sonnet if that fails. Returns the tool's raw result text. */
+/** Session id under which background model calls show on the Usage page. */
+export const BACKGROUND_SESSION = "ba-background";
+
+/**
+ * Headless calls keep no transcript, so the indexer never sees them. Record each
+ * API request they make in usage_events, so the Usage page counts them too.
+ */
+export function trackUsage(msg: any): void {
+  if (msg?.type !== "assistant" || !db) return;
+  const m = msg.message;
+  const u = m?.usage;
+  if (!m?.id || !u) return;
+  try {
+    const cw5 = u.cache_creation?.ephemeral_5m_input_tokens ?? 0;
+    const cw1 = u.cache_creation?.ephemeral_1h_input_tokens ?? 0;
+    db.query(
+      `INSERT OR IGNORE INTO usage_events (uuid, session_id, ts, model, input_tokens, output_tokens, cache_read, cache_write, request_id, cache_write_5m, cache_write_1h, src_path)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(m.id, BACKGROUND_SESSION, Date.now(), m.model ?? null, u.input_tokens ?? 0, u.output_tokens ?? 0, u.cache_read_input_tokens ?? 0, u.cache_creation_input_tokens ?? 0, m.id, cw5, cw1, "ba:background");
+  } catch {
+    /* usage is informative only */
+  }
+}
+
+/** One exact tool call on the sync model (Haiku by default), retried on Sonnet if allowed. Returns the tool's raw result text. */
 export async function connectorCall(tool: string, input: unknown, reason: string): Promise<string> {
   mkdirSync(SCRATCH_DIR, { recursive: true });
   // A tool's own error (a bad query, a missing page) is the answer: trying another way only repeats it.
@@ -60,7 +85,9 @@ export async function connectorCall(tool: string, input: unknown, reason: string
     console.warn(`[connector] warm ${short} failed, using a new session: ${(e as Error)?.message}`);
   }
   let lastError = "no result";
-  for (const model of ["haiku", "sonnet"]) {
+  const m = getBaModels();
+  const models = [...new Set([m.sync, ...(m.syncFallback ? ["sonnet"] : [])])];
+  for (const model of models) {
     try {
       const out = await oneCall(model, tool, input, reason);
       if (out !== null) return out;
@@ -96,7 +123,10 @@ async function oneCallInner(model: string, tool: string, input: unknown, reason:
       env: claudeEnv(),
       cwd: SCRATCH_DIR,
       model,
-      maxTurns: 4,
+      // Turn 1 loads the tool, turn 2 calls it; the result arrives before a third
+      // turn, so the model's sign-off is never paid for.
+      maxTurns: 2,
+      maxThinkingTokens: 0,
       persistSession: false,
       settingSources: ["user"],
       skills: [],
@@ -110,6 +140,7 @@ async function oneCallInner(model: string, tool: string, input: unknown, reason:
   let result: string | null = null;
   let toolError: string | null = null;
   for await (const msg of q as AsyncIterable<any>) {
+    trackUsage(msg);
     if (msg.type === "assistant") {
       for (const c of msg.message?.content ?? []) if (c.type === "tool_use" && c.name === tool) pending.add(c.id);
     } else if (msg.type === "user") {
@@ -132,15 +163,73 @@ async function oneCallInner(model: string, tool: string, input: unknown, reason:
   return result;
 }
 
+export type ConnectorState = {
+  /** `connected`, `needs-auth`, `failed`, `disabled`, `pending` (still connecting when we gave up), or `missing`. */
+  status: string;
+  /** The connector's tools by short name, when connected. */
+  tools: string[];
+};
+
+/**
+ * One claude.ai connector's state and tools, e.g. `connectorState("claude.ai Slack")`.
+ * Which tools a connector offers differs between accounts (one person's Slack has
+ * file uploads, another's does not).
+ *
+ * The prompt is a stream that never sends anything, so no model call is made: the
+ * MCP status is a control request Claude Code answers on its own. Connectors join
+ * a few seconds after start, so this waits while the one asked about is pending.
+ */
+export async function connectorState(name: string, waitMs = 30_000): Promise<ConnectorState> {
+  mkdirSync(SCRATCH_DIR, { recursive: true });
+  const stop = new AbortController();
+  const limit = setTimeout(() => stop.abort(), waitMs + 30_000);
+  const silent = (async function* (): AsyncGenerator<never> {
+    await new Promise<void>((done) => stop.signal.addEventListener("abort", () => done()));
+  })();
+  const q = query({
+    prompt: silent as any,
+    options: {
+      env: claudeEnv(),
+      cwd: SCRATCH_DIR,
+      persistSession: false,
+      settingSources: ["user"],
+      skills: [],
+      allowedTools: [],
+      permissionMode: "dontAsk",
+      abortController: stop,
+    },
+  });
+  // Drain the stream so the process is not held up by unread messages.
+  const drained = (async () => {
+    try {
+      for await (const _ of q as AsyncIterable<unknown>);
+    } catch {}
+  })();
+  try {
+    const until = Date.now() + waitMs;
+    for (;;) {
+      const server = (await q.mcpServerStatus()).find((s) => s.name === name);
+      if (!server) return { status: "missing", tools: [] };
+      if (server.status !== "pending" || Date.now() > until)
+        return { status: server.status, tools: server.status === "connected" ? (server.tools ?? []).map((t) => t.name) : [] };
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  } finally {
+    clearTimeout(limit);
+    stop.abort();
+    await drained;
+  }
+}
+
 /**
  * Claude Code moves a large tool result to a file and hands back a pointer
  * ("<persisted-output> … Full output saved to: /path"). Read the file instead.
  */
 function unpersist(text: string): string {
-  // Two shapes: "<persisted-output> … saved to: /path" and, for a connector result over the token limit,
-  // "Error: result (N characters) exceeds maximum allowed tokens. Output has been saved to /path".
-  if (!text.includes("<persisted-output>") && !/exceeds maximum allowed tokens/.test(text.slice(0, 300))) return text;
-  const path = text.match(/saved to:?\s*(\/\S+?\.(?:txt|json))/)?.[1];
+  // Two wordings: "<persisted-output> … Full output saved to: /path" and, for an over-limit
+  // MCP result, "Error: result (N characters) exceeds maximum allowed tokens. Output has been saved to /path."
+  if (!text.includes("<persisted-output>") && !/exceeds maximum allowed tokens/.test(text.slice(0, 400))) return text;
+  const path = text.match(/saved to:?\s*(\/\S+?\.(?:txt|json))\.?(?:\s|$)/)?.[1];
   if (!path || !existsSync(path)) {
     console.warn("[ba] large connector result could not be read back:", text.slice(0, 600));
     return text;
@@ -182,8 +271,9 @@ async function batchInner<I>(tool: string, inputs: I[], keyOf: (input: I) => str
     options: {
       env: claudeEnv(),
       cwd: SCRATCH_DIR,
-      model: "haiku",
+      model: getBaModels().sync,
       maxTurns: 6,
+      maxThinkingTokens: 0,
       persistSession: false,
       settingSources: ["user"],
       skills: [],
@@ -195,6 +285,7 @@ async function batchInner<I>(tool: string, inputs: I[], keyOf: (input: I) => str
   });
   const byId = new Map<string, string>();
   for await (const msg of q as AsyncIterable<any>) {
+    trackUsage(msg);
     if (msg.type === "assistant") {
       for (const c of msg.message?.content ?? []) if (c.type === "tool_use" && c.name === tool) byId.set(c.id, keyOf(c.input as I));
     } else if (msg.type === "user") {

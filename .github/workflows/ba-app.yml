@@ -1,0 +1,69 @@
+# Builds the BA edition's Mac app and publishes it, so a BA installs it with one
+# line (get.sh) and never needs git, Homebrew, Node or Bun on their own Mac.
+#
+# Every push to qargo-ba-edition publishes the app on one rolling release, tag
+# `ba-app`, as Claude-Dashboard-arm64-<build>.zip. build.txt beside it names the
+# current build: get.sh reads it, then downloads that zip, and a re-run can tell
+# an update from what is already installed. scripts/publish-ba-app.sh does both
+# halves, and explains the order the files are replaced in.
+name: BA app
+
+on:
+  push:
+    branches: [qargo-ba-edition]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    # GitHub's current macOS image, which runs on Apple silicon like the app. A
+    # pinned version label stops getting machines once GitHub retires it.
+    runs-on: macos-latest
+    # A newer push makes a build in progress pointless.
+    concurrency:
+      group: ba-app-build
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # The version the build was tested with; 1.4 already broke Electron's
+          # download script once (see scripts/publish-ba-app.sh).
+          bun-version: 1.4.5
+
+      - name: Build the app
+        run: ./scripts/publish-ba-app.sh --build-only
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ba-app
+          path: build/ba-app/
+          retention-days: 3
+          compression-level: 0
+
+  publish:
+    needs: build
+    # A manual run from another branch builds it, as a check, but only
+    # qargo-ba-edition reaches the BAs.
+    if: github.ref == 'refs/heads/qargo-ba-edition'
+    runs-on: ubuntu-latest
+    # Never cancelled half-way, since it replaces files people are downloading.
+    # A newer publish waits until this one is done.
+    concurrency:
+      group: ba-app-publish
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ba-app
+          path: build/ba-app
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/publish-ba-app.sh --no-build --repo "$GITHUB_REPOSITORY"

@@ -24,13 +24,14 @@ import {
   type MatchCustomer,
   isSlackNoise,
   slackText,
+  type BaModels,
 } from "../shared/baCustomers.ts";
 import { getAgent, startAgent } from "./agents.ts";
 import { baseFields, sessionDataShaper } from "./baDataShaper.ts";
 import { initSessionContext, recordSessionLink, sessionContext, threadIdIn } from "./baSessionContext.ts";
 import { lastQargoMcpStatus, mcpHowTo, qargoMcpStatus } from "./baQargoMcp.ts";
 import { cached, connectorCall, dropCache, FRONT_SEARCH, initConnector, markStale, NOTION_FETCH, NOTION_SELF, notionSql, parseJson, peekCache } from "./baConnector.ts";
-import { getBaFlags, getMailStyle, mailStyleBlock, setBaFlags, setMailStyle } from "./baEdition.ts";
+import { getBaFlags, getBaModels, getMailStyle, mailStyleBlock, setBaFlags, setBaModels, setMailStyle } from "./baEdition.ts";
 import { agenda } from "./baCalendar.ts";
 import { attachmentError, initAttachments, saveAttachments, savedFor } from "./baAttachments.ts";
 import { chooseFolderNative, createEntry, openFolder } from "./baFiles.ts";
@@ -38,7 +39,7 @@ import { keyPoints, mailView, readDraft, readThread, reply, suggestReply, thread
 import { handleFeedbackRoute } from "./baFeedback.ts";
 import { handlePublishedRoute } from "./baPublished.ts";
 import { askQai, composeQai, initQai, listQai, parseThread, qaiReplies, qaiToday } from "./baQai.ts";
-import { SCRATCH_DIR } from "./paths.ts";
+import { claudeShellCommand, SCRATCH_DIR } from "./paths.ts";
 import { createProject, ensureProjectFolder } from "./workspaces.ts";
 
 /**
@@ -77,15 +78,20 @@ export function initBaCustomers(database: Database) {
   initQai(database);
   initAttachments(database);
   initSessionContext(database);
-  // Keep the mailbox warm: first round shortly after boot, then every 10 minutes.
+  // Keep the mailbox warm: first round shortly after boot, then every few minutes as
+  // set in Settings (0: no background reads, only when you open the Inbox).
   let round = 0;
+  let lastWarm = 0;
   const warm = () => {
     const f = getBaFlags();
+    const every = getBaModels().refreshMinutes;
+    if (lastWarm && (every === 0 || Date.now() - lastWarm < every * 60_000 - 5_000)) return;
+    lastWarm = Date.now();
     if (f.enabled && f.inbox) void warmMail(round++).catch(() => {});
     if (f.enabled && f.qargoMcp) void qargoMcpStatus().catch(() => {});
   };
   setTimeout(warm, 20_000);
-  setInterval(warm, 10 * 60_000);
+  setInterval(warm, 60_000);
   db.exec(`
     CREATE TABLE IF NOT EXISTS ba_deals (
       deal_url        TEXT PRIMARY KEY,
@@ -857,7 +863,7 @@ async function startCloud(cwd: string, title: string, prompt: string): Promise<{
   writeFileSync(file, prompt);
   const made = await createTerminal({ folder: cwd, workspaceId: null, title: `Cloud · ${title}`.slice(0, 80) });
   if ("error" in made) return { ok: false, error: made.error };
-  const cmd = `claude --cloud "$(cat ${JSON.stringify(file)})"`;
+  const cmd = claudeShellCommand(`--cloud "$(cat ${JSON.stringify(file)})"`);
   const sent = await tmux("send-keys", "-t", made.session, cmd, "Enter");
   if (!sent.ok) return { ok: false, error: "could not start the cloud session in the terminal" };
   // The CLI creates the session, prints its claude.ai/code link and returns. Wait for the link, then the
@@ -931,7 +937,8 @@ export function runAction(a: BaAction): { ok: true; key: string } | { ok: false;
   const built = buildAction(a);
   if (!built.ok) return built;
   // Production writes on the Qargo MCP are refused by auto mode's safety check, so a prod session asks you instead.
-  const key = startAgent({ cwd: built.cwd, permissionMode: a.tenant === "prod" ? "default" : "auto", prompt: built.prompt, title: built.title });
+  const model = getBaModels().sessions;
+  const key = startAgent({ cwd: built.cwd, permissionMode: a.tenant === "prod" ? "default" : "auto", prompt: built.prompt, title: built.title, ...(model === "default" ? {} : { model }) });
   // What the session works on, for the pane beside its chat.
   const threadId = threadIdIn(a.url);
   const isIr = !!a.url && /notion\.(so|com)/.test(a.url);
@@ -1120,7 +1127,7 @@ export async function handleBaRoute(req: Request, url: URL): Promise<Response | 
       const cwd = (b?.projectId && ensureProjectFolder(b.projectId)) || SCRATCH_DIR;
       const made = await createTerminal({ folder: cwd, workspaceId: null, title: "From the cloud" });
       if ("error" in made) return json({ error: made.error }, 400);
-      await tmux("send-keys", "-t", made.session, `claude --teleport ${id}`, "Enter");
+      await tmux("send-keys", "-t", made.session, claudeShellCommand(`--teleport ${id}`), "Enter");
       return json({ ok: true, key: terminalKey(made.id) });
     }
     if (p === "/api/ba/choose-folder" && req.method === "POST") {
@@ -1154,6 +1161,10 @@ export async function handleBaRoute(req: Request, url: URL): Promise<Response | 
       return json({ text: await suggestReply(suggestMatch[1]!, context, b?.instructions ?? "") });
     }
     if (p === "/api/ba/qargo-mcp") return json(await qargoMcpStatus(refresh));
+    if (p === "/api/ba/models") {
+      if (req.method === "PUT") return json(setBaModels((await body<Partial<BaModels>>()) ?? {}));
+      return json(getBaModels());
+    }
     if (p === "/api/ba/mail-style") {
       if (req.method === "PUT") return json({ text: setMailStyle((await body<{ text?: string }>())?.text ?? "") });
       return json({ text: getMailStyle(), block: mailStyleBlock() });

@@ -1,8 +1,8 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_BA_FLAGS, type BaFlags } from "../shared/baCustomers.ts";
+import { BA_REFRESH_CHOICES, DEFAULT_BA_FLAGS, DEFAULT_BA_MODELS, type BaFlags, type BaModels } from "../shared/baCustomers.ts";
 import { blankSchedule, blankTemplate, type Template } from "../shared/templates.ts";
-import { DATA_DIR } from "./paths.ts";
+import { CLAUDE_HOME, DATA_DIR } from "./paths.ts";
 import { getSettings, updateSettings } from "./settings.ts";
 import { skillsPlugin } from "./agents.ts";
 
@@ -83,7 +83,7 @@ export const BA_TEMPLATES: Template[] = [
   }),
 ];
 
-type Marker = { steps: Record<string, string>; flags?: Partial<BaFlags>; mailStyle?: string };
+type Marker = { steps: Record<string, string>; flags?: Partial<BaFlags>; mailStyle?: string; models?: Partial<BaModels> };
 
 function readMarker(): Marker {
   try {
@@ -138,7 +138,7 @@ export function mailStyleBlock(): string {
   const own = getMailStyle().trim();
   let global = "";
   try {
-    const p = join(process.env.HOME ?? "", ".claude", "CLAUDE.md");
+    const p = join(CLAUDE_HOME, "CLAUDE.md");
     if (existsSync(p)) global = readFileSync(p, "utf8").trim().slice(0, 6000);
   } catch {
     /* unreadable: the dashboard's own copy still applies */
@@ -158,6 +158,24 @@ export function mailStyleBlock(): string {
     global && `My general instructions for Claude (follow the parts about writing):\n${global}`,
   ].filter(Boolean);
   return parts.length ? `\n\n<my_instructions>\n${parts.join("\n\n")}\n</my_instructions>` : "";
+}
+
+/** Models for background work and the refresh interval, kept beside the switches. */
+export function getBaModels(): BaModels {
+  return { ...DEFAULT_BA_MODELS, ...(readMarker().models ?? {}) };
+}
+
+const MODEL = new Set(["haiku", "sonnet", "opus"]);
+export function setBaModels(patch: Partial<BaModels>): BaModels {
+  const marker = readMarker();
+  const clean: Partial<BaModels> = {};
+  for (const k of ["sync", "keyPoints", "drafts"] as const) if (MODEL.has(patch[k] as string)) clean[k] = patch[k];
+  if (patch.sessions === "default" || MODEL.has(patch.sessions as string)) clean.sessions = patch.sessions;
+  if (typeof patch.syncFallback === "boolean") clean.syncFallback = patch.syncFallback;
+  if (BA_REFRESH_CHOICES.includes(patch.refreshMinutes as number)) clean.refreshMinutes = patch.refreshMinutes;
+  marker.models = { ...(marker.models ?? {}), ...clean };
+  writeFileSync(MARKER_PATH, JSON.stringify(marker, null, 2));
+  return getBaModels();
 }
 
 /** The BA-edition switches, kept beside the one-time steps. */

@@ -1,5 +1,5 @@
 import { WbChatNext, WbDrawerLinks, WbDrawerTitle, WbSessionSteps, wbTicketIdOf } from "./WorkbenchView.tsx";
-import SessionContextPane from "./SessionContextPane.tsx";
+import SessionContextPane, { useScxPos } from "./SessionContextPane.tsx";
 import { baFlags } from "../baFlags.ts";
 import DataShaperPanel from "./DataShaperPanel.tsx";
 import { isArtifactKey } from "../../shared/artifacts.ts";
@@ -130,6 +130,7 @@ function SessionPanelBody({
 }) {
   const [data, setData] = useState<SessionDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [scxPos] = useScxPos();
   // The drawer/tile itself is the scroll container for a read-only session, so
   // opening one lands on the latest exchange rather than the top of the history.
   useJumpToEnd(scrollRef, !agent && !!data, id);
@@ -216,8 +217,6 @@ function SessionPanelBody({
 
       {agent ? (
         <>
-          {baFlags.customers && !wbTicketIdOf(cwd) && <SessionContextPane sessionId={id} agentKey={agent.key} cwd={cwd} />}
-          {baFlags.qargoMcp && <DataShaperPanel sessionId={id} agentKey={agent.key} live compact />}
           {(() => {
             // Turns from before the dashboard took over (e.g. before a restart), cut at
             // the adoption time so they never double-print with the live timeline.
@@ -231,26 +230,38 @@ function SessionPanelBody({
                 />
               </details>
             );
+            const wbTicket = baFlags.workbench && !!wbTicketIdOf(cwd);
             const chat = (
-              <LiveConversation
-                agentKey={agent.key}
-                settings={settings}
-                onSettings={onSettings}
-                onGone={onClose}
-                scrollJumpVariant={jumpVariant === "compact" ? "compact" : "float"}
-                earlier={earlier}
-                footer={baFlags.workbench && wbTicketIdOf(cwd) ? <WbChatNext cwd={cwd} /> : undefined}
-              />
+              <>
+                {baFlags.qargoMcp && <DataShaperPanel sessionId={id} agentKey={agent.key} live compact />}
+                <LiveConversation
+                  agentKey={agent.key}
+                  settings={settings}
+                  onSettings={onSettings}
+                  onGone={onClose}
+                  scrollJumpVariant={jumpVariant === "compact" ? "compact" : "float"}
+                  earlier={earlier}
+                  footer={wbTicket ? <WbChatNext cwd={cwd} /> : undefined}
+                />
+              </>
             );
             // Workbench ticket: the chat on the left, its steps top to bottom on the right.
-            return baFlags.workbench && wbTicketIdOf(cwd) ? (
-              <div className="wbt-split">
-                <div className="wbt-split-chat">{chat}</div>
-                <WbSessionSteps cwd={cwd} />
-              </div>
-            ) : (
-              chat
-            );
+            if (wbTicket)
+              return (
+                <div className="wbt-split">
+                  <div className="wbt-split-chat">{chat}</div>
+                  <WbSessionSteps cwd={cwd} />
+                </div>
+              );
+            // BA edition: the pane beside the chat, left, right or above it as set in its header.
+            if (baFlags.customers)
+              return (
+                <div className={`scx-host ctx-${scxPos}`}>
+                  <SessionContextPane sessionId={id} agentKey={agent.key} cwd={cwd} />
+                  <div className="scx-chat">{chat}</div>
+                </div>
+              );
+            return chat;
           })()}
         </>
       ) : (

@@ -156,9 +156,9 @@ else
 fi
 
 if has_claude_home; then
-  ok "~/.claude found — there is history to index"
+  ok "$(claude_home) found — there is history to index"
 else
-  warn "~/.claude does not exist yet"
+  warn "$(claude_home) does not exist yet"
   hint "run Claude Code once; the dashboard reads its transcripts from there"
 fi
 
@@ -233,7 +233,8 @@ ok "packages installed"
 if [ "$MODE" = app ]; then
   if [ ! -d node_modules/electron/dist ]; then
     step "Electron"
-    bun node_modules/electron/install.js
+    # Electron's download script runs under Node; Bun 1.4 fails it.
+    if have node; then node node_modules/electron/install.js; else bun node_modules/electron/install.js; fi
     ok "downloaded"
   fi
   ./scripts/build-app.sh --install

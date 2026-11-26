@@ -574,6 +574,7 @@ export default function InboxView({ onOpen }: { onOpen: (key: string) => void })
   const [q, setQ] = useState("");
   const [onlyTodo, setOnlyTodo] = useState(false);
   const [onlyAuto, setOnlyAuto] = useState(false);
+  const [onlyNeeds, setOnlyNeeds] = useState(false);
 
   const load = useCallback((v: View, refresh: boolean) => {
     setBusy(v);
@@ -630,15 +631,39 @@ export default function InboxView({ onOpen }: { onOpen: (key: string) => void })
 
   const mail = byView[view];
   const seen = new Set(mail?.seenIds ?? []);
+  // What you have opened here, and when: a conversation updated after that reads as unread again.
+  const [opened, setOpened] = useState<Record<string, number>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("ba-mail-opened") ?? "{}") as Record<string, number>;
+    } catch {
+      return {};
+    }
+  });
+  useEffect(() => {
+    if (!selected) return;
+    setOpened((o) => {
+      const next = { ...o, [selected]: Date.now() };
+      try {
+        localStorage.setItem("ba-mail-opened", JSON.stringify(Object.fromEntries(Object.entries(next).sort((a, b) => b[1] - a[1]).slice(0, 2000))));
+      } catch {
+        /* private window: unread marks last until reload */
+      }
+      return next;
+    });
+  }, [selected]);
+  const isUnread = (t: BaTriageThread) => !opened[t.id] || (t.updatedAt ?? 0) > opened[t.id]! + 60_000;
+  const all = mail?.data ?? [];
+  const states = { unread: all.filter(isUnread).length, needs: all.filter((t) => t.lastBy === "them").length, replied: all.filter((t) => t.lastBy === "us").length };
   const list = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return (mail?.data ?? [])
       .filter((t) => customerFilter === null || t.link_?.projectId === customerFilter || (!t.link_ && t.suggestion?.projectId === customerFilter))
       .filter((t) => !onlyTodo || !t.link_)
       .filter((t) => !onlyAuto || t.link_?.source === "auto")
+      .filter((t) => !onlyNeeds || t.lastBy === "them")
       .filter((t) => !needle || `${t.subject} ${t.from ?? ""} ${t.snippet ?? ""}`.toLowerCase().includes(needle))
       .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-  }, [mail, customerFilter, onlyTodo, onlyAuto, q]);
+  }, [mail, customerFilter, onlyTodo, onlyAuto, onlyNeeds, q]);
   const current = list.find((t) => t.id === selected) ?? null;
 
   // Up/down (or j/k) move through the list, like a mail client.
@@ -705,21 +730,53 @@ export default function InboxView({ onOpen }: { onOpen: (key: string) => void })
             {busy === view ? "…" : "↻"}
           </button>
         </div>
-        <div className="mb-list-sub ba-muted">
-          <span>
-            {VIEWS.find((v) => v.key === view)?.label}
-            {customerFilter !== null ? ` · ${nameOf(customerFilter)}` : ""} · {mail ? `updated ${ago(mail.fetchedAt)}` : "loading…"}
-            {mail?.pending ? ` · reading ${mail.pending} conversations…` : ""}
-          </span>
-          {view !== "placed" && (
-            <span className="mb-filters">
-              <label>
-                <input type="checkbox" checked={onlyTodo} onChange={(e) => setOnlyTodo(e.target.checked)} /> To triage ({todo})
-              </label>
-              <label title="Placed automatically: check them, Unplace teaches the rules">
-                <input type="checkbox" checked={onlyAuto} onChange={(e) => setOnlyAuto(e.target.checked)} /> <BoltIcon /> Auto ({(mail?.data ?? []).filter((t) => t.link_?.source === "auto").length})
-              </label>
+        <div className="mb-list-sub">
+          <div className="mb-meta">
+            <span>
+              <strong>{VIEWS.find((v) => v.key === view)?.label}</strong>
+              {customerFilter !== null ? ` · ${nameOf(customerFilter)}` : ""}
             </span>
+            <span className="ba-muted">
+              {mail?.pending ? (
+                <span className="mb-reading" title="Senders and reply state fill in once each conversation is read">
+                  <span className="mb-spin" /> reading {mail.pending}
+                </span>
+              ) : mail ? (
+                `updated ${ago(mail.fetchedAt)}`
+              ) : (
+                "loading…"
+              )}
+            </span>
+          </div>
+          {mail?.data && (
+            <div className="mb-chips">
+              <span className="mb-chip static" title="Not opened here since its last message">
+                <span className="mb-state unread" /> {states.unread} unread
+              </span>
+              {view !== "placed" ? (
+                <button className={`mb-chip ${onlyNeeds ? "on" : ""}`} title="The last message is from the customer · click to show only these" onClick={() => setOnlyNeeds(!onlyNeeds)}>
+                  <span className="mb-state needs" /> {states.needs} to reply
+                </button>
+              ) : (
+                <span className="mb-chip static" title="The last message is from the customer">
+                  <span className="mb-state needs" /> {states.needs} to reply
+                </span>
+              )}
+              <span className="mb-chip static" title="The last message is from Qargo">
+                <span className="mb-state replied" /> {states.replied} replied
+              </span>
+              {view !== "placed" && (
+                <>
+                  <span className="mb-chip-sep" />
+                  <button className={`mb-chip ${onlyTodo ? "on" : ""}`} title="Not placed at a customer yet" onClick={() => setOnlyTodo(!onlyTodo)}>
+                    To triage {todo}
+                  </button>
+                  <button className={`mb-chip ${onlyAuto ? "on" : ""}`} title="Placed automatically: check them, Unplace teaches the rules" onClick={() => setOnlyAuto(!onlyAuto)}>
+                    <BoltIcon /> Auto {(mail?.data ?? []).filter((t) => t.link_?.source === "auto").length}
+                  </button>
+                </>
+              )}
+            </div>
           )}
         </div>
         {mail?.error && <div className="chat-error">{mail.error}</div>}
@@ -728,8 +785,9 @@ export default function InboxView({ onOpen }: { onOpen: (key: string) => void })
         <div className="mb-rows" role="listbox" aria-label="Conversations">
           {list.map((t) => {
             const isNew = (mail?.seenIds.length ?? 0) > 0 && !seen.has(t.id);
+            const unread = isUnread(t);
             return (
-              <button key={t.id} role="option" aria-selected={selected === t.id} className={`mb-row ${selected === t.id ? "on" : ""} ${isNew ? "new" : ""}`} onClick={() => setSelected(t.id)}>
+              <button key={t.id} role="option" aria-selected={selected === t.id} className={`mb-row ${selected === t.id ? "on" : ""} ${unread ? "new" : ""}`} onClick={() => setSelected(t.id)}>
                 <div className="mb-row-top">
                   <span className="mb-from">
                     {isNew && <span className="ba-dot" />}
@@ -740,6 +798,8 @@ export default function InboxView({ onOpen }: { onOpen: (key: string) => void })
                 <div className="mb-subject">{t.subject}</div>
                 {t.draft ? <div className="mb-snippet"><span className="mb-draft-tag">Draft</span> {t.draft.preview.slice(0, 180)}</div> : t.snippet && <div className="mb-snippet">{cleanMail(t.snippet).text.replace(/\s+/g, " ").slice(0, 180)}</div>}
                 <div className="mb-tags">
+                  {t.lastBy === "them" && <span className="ba-chip needs">Needs a reply</span>}
+                  {t.lastBy === "us" && <span className="ba-chip replied">Replied</span>}
                   {t.link_ ? (
                     <span className="ba-chip" title={t.link_.source === "auto" ? "Placed automatically" : undefined}>
                       {t.link_.source === "auto" ? <BoltIcon /> : ""}

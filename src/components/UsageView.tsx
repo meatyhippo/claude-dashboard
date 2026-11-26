@@ -179,7 +179,8 @@ export function UsageView({
               <button
                 key={t.id}
                 className="top-session"
-                onClick={(e) => onOpen(t.id, { full: e.metaKey || e.ctrlKey })}
+                // BA edition: background reads have no transcript to open.
+                onClick={(e) => t.id !== "ba-background" && onOpen(t.id, { full: e.metaKey || e.ctrlKey })}
                 title={t.cwd ?? undefined}
               >
                 <span className="top-session-usd">{fmtUsd(t.costUsd)}</span>

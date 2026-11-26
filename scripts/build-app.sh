@@ -3,6 +3,7 @@
 #
 #   bun run app:mac             build it
 #   bun run app:mac --install   build it and put it in /Applications
+#   bun run app:mac --zip F     build it and zip the signed app to F (CI releases)
 #
 # The bundle carries everything the dashboard runs on: the built UI, the daemon's
 # source with its dependencies, and a bun to run it. Nothing in it is personal;
@@ -22,13 +23,16 @@ RES="build/app-resources"
 # ad hoc: fine to run, but macOS asks for Calendar access again after each build.
 SIGN_ID="${SIGN_ID:--}"
 INSTALL=0
+ZIP=""
 
-for arg in "$@"; do
-  case "$arg" in
+while [ $# -gt 0 ]; do
+  case "$1" in
     --install) INSTALL=1 ;;
-    -h|--help) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *) bad "unknown option: $arg"; exit 1 ;;
+    --zip) ZIP="${2:?--zip needs a file name}"; shift ;;
+    -h|--help) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) bad "unknown option: $1"; exit 1 ;;
   esac
+  shift
 done
 
 [ "$(uname -s)" = Darwin ] || { bad "the app is built on macOS only"; exit 1; }
@@ -139,6 +143,14 @@ while IFS= read -r b; do sign "$b"; done < <(find "$APP" \( -name "*.framework" 
 codesign --verify --strict "$APP"
 ok "verified"
 
+if [ -n "$ZIP" ]; then
+  step "Zipping"
+  rm -f "$ZIP"
+  # ditto keeps the signature and the symlinks inside the frameworks intact; zip would not.
+  ditto -c -k --keepParent "$APP" "$ZIP"
+  ok "$ZIP ($(du -h "$ZIP" | awk '{print $1}'))"
+fi
+
 if [ "$INSTALL" = 1 ]; then
   step "Installing"
   DEST="/Applications/$APP_NAME.app"
@@ -149,6 +161,13 @@ if [ "$INSTALL" = 1 ]; then
   rm -rf "$DEST"
   ditto --norsrc --noextattr --noacl "$APP" "$DEST"
   ok "$DEST"
+fi
+
+# The signed copy is ~700 MB. Once it has been zipped or installed it is not the
+# only one, so it goes; a plain build keeps it, since it is what was built.
+if [ -n "$ZIP" ] || [ "$INSTALL" = 1 ]; then
+  rm -rf "$STAGE"
+  [ "$INSTALL" = 1 ] && APP="/Applications/$APP_NAME.app" || APP="$ZIP"
 fi
 
 printf "\n%sBuilt%s %s (%s)\n\n" "$BOLD" "$RESET" "$APP" "$(du -sh "$APP" | awk '{print $1}')"

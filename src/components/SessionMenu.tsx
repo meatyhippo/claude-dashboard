@@ -9,11 +9,14 @@ import {
   FullPageIcon,
   MoreVerticalIcon,
   RefreshIcon,
+  SendIcon,
   StopIcon,
   TrashIcon,
 } from "./Icons.tsx";
 import { GloballyOffNote, MUTE_KINDS, useMute } from "./MuteMenu.tsx";
 import { Popover } from "./Popover.tsx";
+import { ExportModal } from "./SessionTransfer.tsx";
+import { baFlags } from "../baFlags.ts";
 
 type Sub = "notify" | "artifacts";
 
@@ -55,6 +58,8 @@ export function SessionMenu({
   // Hoisted out of the popover on purpose: picking an artifact dismisses the menu,
   // and an overlay rendered inside it would be unmounted by its own click.
   const [preview, setPreview] = useState<{ artifact: Artifact; port: number } | null>(null);
+  // Hoisted for the same reason as the artifact preview.
+  const [sending, setSending] = useState(false);
   const muteId = agent?.sessionId ?? agent?.key ?? id;
   const { muted, busy, write, globallyOff } = useMute(muteId, label, settings, onSettings);
 
@@ -143,6 +148,19 @@ export function SessionMenu({
               <span className="sess-menu-label">Open full page</span>
             </a>
           )}
+          {baFlags.handoff && (
+            <button
+              role="menuitem"
+              title="Send this session to a colleague in Slack, to import and continue"
+              onClick={() => {
+                close();
+                setSending(true);
+              }}
+            >
+              <SendIcon />
+              Send to a colleague…
+            </button>
+          )}
           {live && agent?.sessionId && (
             <button
               role="menuitem"
@@ -177,6 +195,7 @@ export function SessionMenu({
       {preview && (
         <ArtifactOverlay artifact={preview.artifact} port={preview.port} onClose={() => setPreview(null)} />
       )}
+      {sending && <ExportModal sessionId={agent?.sessionId ?? id} onClose={() => setSending(false)} />}
     </>
   );
 }

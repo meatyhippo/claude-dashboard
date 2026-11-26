@@ -103,6 +103,32 @@ function guardNavigation(w: BrowserWindow) {
   });
 }
 
+/** BA edition: hosts a claude.ai sign-in or session may open (sign-in pop-ups included). */
+const CLAUDE_HOSTS = /^https:\/\/([a-z0-9-]+\.)*(claude\.ai|anthropic\.com|accounts\.google\.com|appleid\.apple\.com)(\/|$)/;
+
+/**
+ * BA edition: the cloud-session panel's <webview>. Only claude.ai, in its own
+ * storage, with no preload or Node; its pop-ups for sign-in stay in the app,
+ * every other link leaves for the browser.
+ */
+function guardWebviews(w: BrowserWindow) {
+  w.webContents.on("will-attach-webview", (e, prefs, params) => {
+    if (!/^https:\/\/claude\.ai\//.test(params.src)) return e.preventDefault();
+    delete prefs.preload;
+    prefs.nodeIntegration = false;
+    prefs.contextIsolation = true;
+    prefs.sandbox = true;
+    params.partition = "persist:claude-ai";
+  });
+  w.webContents.on("did-attach-webview", (_e, contents) => {
+    contents.setWindowOpenHandler(({ url }) => {
+      if (CLAUDE_HOSTS.test(url)) return { action: "allow", overrideBrowserWindowOptions: { width: 520, height: 720, webPreferences: { partition: "persist:claude-ai", sandbox: true, contextIsolation: true, nodeIntegration: false } } };
+      if (/^https?:/.test(url)) void shell.openExternal(url);
+      return { action: "deny" };
+    });
+  });
+}
+
 /** Where a further window opens: the size of the one in front, a step down and to the right of it. */
 function besideBounds(front: BrowserWindow): Bounds {
   const b = front.getNormalBounds();
@@ -130,6 +156,8 @@ function createWindow() {
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
+      // BA edition: the cloud-session panel embeds claude.ai/code (guardWebviews).
+      webviewTag: true,
     },
   });
   win = w;
@@ -144,6 +172,7 @@ function createWindow() {
     if (win === w) win = allWindows()[0] ?? null;
   });
   guardNavigation(w);
+  guardWebviews(w);
   void w.loadURL(`${APP_URL}/${pendingHash ?? ""}`);
   pendingHash = null;
 }
