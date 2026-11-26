@@ -1,13 +1,22 @@
 #!/bin/bash
 # Install or update Claude Dashboard (BA edition) on a Mac. Nothing else needed:
-# no git, Homebrew, Node or Bun. Paste this into Terminal:
+# no git, Homebrew, Node or Bun. The repository is private, so the first time:
 #
-#   curl -fsSL https://raw.githubusercontent.com/MathijsRochus/claude-dashboard/qargo-ba-edition/get.sh | bash
+#   1. accept your invitation to github.com/MathijsRochus/claude-dashboard;
+#   2. download this file (signed in to GitHub in your browser):
+#      https://github.com/MathijsRochus/claude-dashboard/releases/download/ba-app/get.sh
+#   3. run it in Terminal:  bash ~/Downloads/get.sh
 #
-# Run the same line again to update. It:
-#   1. installs Claude Code with Anthropic's installer if it is missing, and signs you in;
-#   2. downloads the app, built by GitHub from this repository, into /Applications;
-#   3. asks how you want to use it: as an app with its own window, or in your browser
+# It keeps the newest copy of itself, so to update:  bash ~/.claude-dashboard/get.sh
+# With GitHub's gh tool signed in already, this one line does the same:
+#
+#   gh release download ba-app -R MathijsRochus/claude-dashboard -p get.sh -O - | bash
+#
+# It:
+#   1. signs you in to GitHub in your browser, with GitHub's gh tool (fetched if missing);
+#   2. installs Claude Code with Anthropic's installer if it is missing, and signs you in;
+#   3. downloads the app from the repository's ba-app release into /Applications;
+#   4. asks how you want to use it: as an app with its own window, or in your browser
 #      (the dashboard then starts by itself when you log in, at http://localhost:5757).
 #
 # It never stops a running dashboard, which ends its sessions, without asking
@@ -21,7 +30,13 @@ set -euo pipefail
 
 REPO="${CLAUDE_DASHBOARD_REPO:-MathijsRochus/claude-dashboard}"
 TAG="${CLAUDE_DASHBOARD_TAG:-ba-app}"
-DOWNLOAD="${CLAUDE_DASHBOARD_DOWNLOAD:-https://github.com/$REPO/releases/download/$TAG}"
+# Only to test this script against a plain web server: the files then come from
+# there, and GitHub is not used at all.
+DOWNLOAD="${CLAUDE_DASHBOARD_DOWNLOAD:-}"
+SOURCE="${DOWNLOAD:-the $TAG release of $REPO}"
+API="https://api.github.com"
+GH=""
+TOKEN=""
 APP_NAME="Claude Dashboard"
 APPS_DIR="${CLAUDE_DASHBOARD_APPS_DIR:-/Applications}"
 # The port and the LaunchAgent's name only change for testing this script.
@@ -52,9 +67,10 @@ usage() {
 Install or update Claude Dashboard (BA edition) on a Mac with Apple silicon
 and macOS 13 or later:
 
-  curl -fsSL https://raw.githubusercontent.com/MathijsRochus/claude-dashboard/qargo-ba-edition/get.sh | bash
+  bash ~/Downloads/get.sh          the first time, after downloading it
+  bash ~/.claude-dashboard/get.sh  to update; it keeps the newest copy there
 
-Run the same line again to update. Options go after "bash -s --":
+Options go after the file name (after "bash -s --" when piped into bash):
 
   --app       use it as an app, with its own window and Dock icon
   --browser   use it in your browser at http://localhost:5757; starts when you log in
@@ -170,14 +186,135 @@ find_claude() {
   done
 }
 
+# ── GitHub ────────────────────────────────────────────────────────────────────
+# The repository is private, so downloads need the BA's own GitHub sign-in.
+# GitHub's gh tool does the sign-in in the browser and keeps it in the keychain.
+
+find_gh() {
+  GH="$(command -v gh 2>/dev/null || true)"
+  [ -n "$GH" ] || { [ -x "$DATA_DIR/bin/gh" ] && GH="$DATA_DIR/bin/gh"; }
+  [ -n "$GH" ]
+}
+
+# GitHub's newest gh for Apple silicon, checked against the checksum GitHub
+# publishes with it and against GitHub's signature, kept in $DATA_DIR/bin.
+fetch_gh() {
+  local tag v base name sum
+  tag="$(curl -fsSI --max-time 20 https://github.com/cli/cli/releases/latest 2>/dev/null |
+    awk 'tolower($1) == "location:" { print $2 }' | tr -d '\r')"
+  v="${tag##*/v}"
+  case "$v" in "" | *[!0-9.]*) return 1 ;; esac
+  base="https://github.com/cli/cli/releases/download/v$v"
+  name="gh_${v}_macOS_arm64"
+  curl -fsSL --max-time 300 -o "$TMP/gh.zip" "$base/$name.zip" 2>/dev/null || return 1
+  curl -fsSL --max-time 30 -o "$TMP/gh.sums" "$base/gh_${v}_checksums.txt" 2>/dev/null || return 1
+  sum="$(awk -v n="$name.zip" '$2 == n { print $1 }' "$TMP/gh.sums")"
+  [ -n "$sum" ] && [ "$(shasum -a 256 "$TMP/gh.zip" | awk '{ print $1 }')" = "$sum" ] || return 1
+  ditto -x -k "$TMP/gh.zip" "$TMP/gh" || return 1
+  codesign --verify --strict -R='anchor apple generic and certificate leaf[subject.OU] = "VEKTX9H2N7"' \
+    "$TMP/gh/$name/bin/gh" 2>/dev/null || return 1
+  mkdir -p "$DATA_DIR/bin"
+  mv -f "$TMP/gh/$name/bin/gh" "$DATA_DIR/bin/gh" || return 1
+  GH="$DATA_DIR/bin/gh"
+}
+
+gh_signed_in() { "$GH" auth status -h github.com >/dev/null 2>&1; }
+
+# gh's browser sign-in with a one-time code, without its questions: one of them
+# sets git up, and on a Mac without Apple's developer tools any use of git opens
+# their installer.
+gh_sign_in() {
+  printf "  Your browser opens on GitHub. Sign in with the account that was invited, paste\n"
+  printf "  the code shown below (it is copied already), and approve.\n\n"
+  (sleep 2; open "https://github.com/login/device") >/dev/null 2>&1 &
+  GH_PROMPT_DISABLED=1 "$GH" auth login -h github.com --web --clipboard </dev/null 2>&1 |
+    grep --line-buffered -v 'Did you know' || true
+  printf "\n"
+}
+
+# Stops with what to do when this GitHub account cannot see the repository. A
+# pending invitation is accepted here, after asking.
+check_access() {
+  "$GH" api "repos/$REPO" --silent 2>"$TMP/gh.err" && return 0
+  grep -q 'HTTP 404' "$TMP/gh.err" || die "could not reach GitHub" "check your internet connection, then run this again"
+  local inv
+  inv="$("$GH" api user/repository_invitations \
+    --jq ".[] | select((.repository.full_name | ascii_downcase) == (\"$REPO\" | ascii_downcase)) | .id" 2>/dev/null | head -1 || true)"
+  if [ -n "$inv" ] && ask_yes "You are invited to $REPO, but have not accepted yet. Accept now?"; then
+    "$GH" api -X PATCH "user/repository_invitations/$inv" --silent 2>/dev/null &&
+      "$GH" api "repos/$REPO" --silent 2>/dev/null && { ok "accepted the invitation"; return 0; }
+    die "could not accept the invitation" "accept it at https://github.com/$REPO/invitations, then run this again"
+  fi
+  bad "your GitHub account${1:+ ($1)} has no access to $REPO"
+  hint "ask whoever looks after the dashboard to invite ${1:-your account}, accept the invitation, then run this again"
+  hint "accepted already? Give gh access to private repositories with: $GH auth refresh -s repo"
+  printf "\n"
+  exit 1
+}
+
+# curl, with the GitHub sign-in when there is one. The token goes in on stdin, so
+# it never shows in the list of running processes.
+fetch() {
+  if [ -n "$TOKEN" ]; then
+    printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" | curl -K - "$@"
+  else
+    curl "$@"
+  fi
+}
+
+# Where to download a file of the release from. Returns 3 when the release or
+# the file is not there, 1 when GitHub could not be asked.
+asset_url() {
+  if [ -n "$DOWNLOAD" ]; then echo "$DOWNLOAD/$1"; return 0; fi
+  local id
+  if ! id="$("$GH" api "repos/$REPO/releases/tags/$TAG" \
+    --jq ".assets[] | select(.name == \"$1\" and .state == \"uploaded\") | .id" 2>"$TMP/gh.err")"; then
+    grep -q 'HTTP 404' "$TMP/gh.err" && return 3
+    return 1
+  fi
+  [ -n "$id" ] || return 3
+  echo "$API/repos/$REPO/releases/assets/$id"
+}
+
+# Downloads a file of the release. The API hands the file out from a link of its
+# own, which curl follows without the sign-in (curl drops it for another host).
+fetch_asset() { fetch -H "Accept: application/octet-stream" "$@"; }
+
+# Keeps the newest installer in $DATA_DIR/get.sh and, when this one is older,
+# carries on in the newest, so an update always runs the installer published
+# with the app. CLAUDE_DASHBOARD_UPDATED=1 runs this one as it is.
+self_update() {
+  [ -z "${CLAUDE_DASHBOARD_UPDATED:-}" ] || return 0
+  local url saved="$DATA_DIR/get.sh" self="${BASH_SOURCE[0]:-}"
+  url="$(asset_url get.sh)" || return 0
+  fetch_asset -fsSL --max-time 60 -o "$TMP/get.sh" "$url" 2>/dev/null || return 0
+  [ "$(head -1 "$TMP/get.sh")" = "#!/bin/bash" ] && bash -n "$TMP/get.sh" 2>/dev/null || return 0
+  mkdir -p "$DATA_DIR"
+  # A new file and a rename, never a rewrite: this may be the saved copy, which
+  # bash is reading as it runs.
+  if ! cmp -s "$TMP/get.sh" "$saved"; then
+    { cp "$TMP/get.sh" "$saved.new" && chmod 755 "$saved.new" && mv -f "$saved.new" "$saved"; } 2>/dev/null || return 0
+  fi
+  [ -n "$self" ] && [ -f "$self" ] && ! cmp -s "$TMP/get.sh" "$self" || return 0
+  printf "  a newer version of this installer is out; carrying on in that one\n"
+  rm -rf "$TMP"
+  CLAUDE_DASHBOARD_UPDATED=1 exec bash "$saved" "$@"
+}
+
 # The current build's name. A publish replaces build.txt, and it is missing
 # while that happens: a second normally, longer when GitHub is slow. So a 404 is
 # waited out for a minute and a half, while no connection at all fails sooner.
 # Returns 2 when build.txt was missing throughout.
 fetch_build() {
-  local b code tries=0 missing=0 said=0
+  local b url rc code tries=0 missing=0 said=0
   while [ $tries -lt 4 ] && [ $missing -lt 30 ]; do
-    code="$(curl -sSL --max-time 20 -o "$TMP/build.txt" -w '%{http_code}' "$DOWNLOAD/build.txt" 2>/dev/null || true)"
+    rc=0
+    url="$(asset_url build.txt)" || rc=$?
+    case "$rc" in
+      0) code="$(fetch_asset -sSL --max-time 20 -o "$TMP/build.txt" -w '%{http_code}' "$url" 2>/dev/null || true)" ;;
+      3) code=404 ;;
+      *) code=000 ;;
+    esac
     if [ "$code" = 200 ]; then
       b="$(head -1 "$TMP/build.txt" | tr -d '\r')"
       case "$b" in
@@ -197,6 +334,12 @@ fetch_build() {
   done
   [ $missing -ge 30 ] && return 2
   return 1
+}
+
+download_zip() {
+  local url
+  url="$(asset_url "Claude-Dashboard-arm64-$1.zip")" || return 1
+  fetch_asset -fL --progress-bar -o "$TMP/app.zip" "$url"
 }
 
 write_agent() {
@@ -233,6 +376,7 @@ PLIST
 }
 
 main() {
+  local args=("$@")
   while [ $# -gt 0 ]; do
     case "$1" in
       --app) MODE=app ;;
@@ -258,6 +402,29 @@ main() {
   macos="$(sw_vers -productVersion 2>/dev/null || echo 0)"
   [ "${macos%%.*}" -ge "$MIN_MACOS" ] 2>/dev/null ||
     die "the app needs macOS $MIN_MACOS (Ventura) or later; this Mac runs macOS $macos" "update macOS in System Settings → General → Software Update"
+
+  # ── GitHub ──────────────────────────────────────────────────────────────────
+  step "GitHub"
+  if [ -n "$DOWNLOAD" ]; then
+    ok "downloading from $DOWNLOAD instead"
+  else
+    if ! find_gh; then
+      printf "  getting GitHub's gh tool, to sign you in to GitHub\n"
+      fetch_gh || die "could not download GitHub's gh tool" "check your internet connection, then run this again"
+    fi
+    if ! gh_signed_in; then
+      has_tty || die "not signed in to GitHub" "run this in Terminal, so it can sign you in"
+      gh_sign_in
+      gh_signed_in || die "not signed in to GitHub" "run this again to try once more"
+    fi
+    TOKEN="$("$GH" auth token -h github.com 2>/dev/null || true)"
+    [ -n "$TOKEN" ] || die "could not read your GitHub sign-in" "sign in again with: $GH auth login -h github.com --web"
+    local login
+    login="$("$GH" api user --jq .login 2>/dev/null || true)"
+    check_access "$login"
+    ok "signed in${login:+ as $login}, with access to $REPO"
+  fi
+  self_update ${args[@]+"${args[@]}"}
 
   # ── how to use it ───────────────────────────────────────────────────────────
   if [ -z "$MODE" ]; then
@@ -319,8 +486,8 @@ main() {
   step "Download"
   local build rc=0
   build="$(fetch_build)" || rc=$?
-  [ "$rc" = 2 ] && die "there is no build to download at $DOWNLOAD" "ask whoever looks after the dashboard; the release may be missing or private"
-  [ "$rc" = 0 ] || die "could not reach the download at $DOWNLOAD" "check your internet connection, then run this again"
+  [ "$rc" = 2 ] && die "there is no build to download in $SOURCE" "ask whoever looks after the dashboard to publish one"
+  [ "$rc" = 0 ] || die "could not reach $SOURCE" "check your internet connection, then run this again"
   if [ ! -w "$APPS_DIR" ]; then
     # Not an administrator: an Applications folder of their own works the same.
     APPS_DIR="$HOME/Applications"
@@ -344,14 +511,14 @@ main() {
       die "not enough free disk space: $((free_kb / 1024)) MB free, about 1.3 GB needed" "free up some space, then run this again"
     fi
     printf "  downloading build %s\n" "$build"
-    if ! curl -fL --progress-bar "$DOWNLOAD/Claude-Dashboard-arm64-$build.zip" -o "$TMP/app.zip"; then
+    if ! download_zip "$build"; then
       # Two publishes during this download can remove its file; the newest is there.
       local newer
       newer="$(fetch_build || true)"
       [ -n "$newer" ] && [ "$newer" != "$build" ] || die "the download failed; nothing was changed" "run this again in a minute"
       build="$newer"
       printf "  a newer build came out meanwhile; downloading build %s\n" "$build"
-      curl -fL --progress-bar "$DOWNLOAD/Claude-Dashboard-arm64-$build.zip" -o "$TMP/app.zip" ||
+      download_zip "$build" ||
         die "the download failed; nothing was changed" "run this again in a minute"
     fi
     ditto -x -k "$TMP/app.zip" "$TMP/x" || die "could not unpack the download; nothing was changed" "check you have about 1.3 GB free, then run this again"
@@ -484,7 +651,11 @@ main() {
   fi
 
   printf "\n%s✓ done%s\n\n" "$G" "$X"
-  printf "  Update later by running the same line again.\n"
+  if [ -f "$DATA_DIR/get.sh" ]; then
+    printf "  Update later with:  bash %s/get.sh\n" "$(printf '%s' "$DATA_DIR" | sed "s|^$HOME/|~/|")"
+  else
+    printf "  Update later by running this again.\n"
+  fi
   if [ "$MODE" = browser ]; then
     printf "  Bookmark %s. The app in %s opens the same dashboard in a window.\n" "$URL" "$APPS_DIR"
   else

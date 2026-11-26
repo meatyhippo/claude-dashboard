@@ -1,16 +1,18 @@
-# Builds the BA edition's Mac app and publishes it, so a BA installs it with one
-# line (get.sh) and never needs git, Homebrew, Node or Bun on their own Mac.
+# Builds the BA edition's Mac app and publishes it, so a BA installs it with
+# get.sh and never needs git, Homebrew, Node or Bun on their own Mac.
 #
-# Every push to qargo-ba-edition publishes the app on one rolling release, tag
-# `ba-app`, as Claude-Dashboard-arm64-<build>.zip. build.txt beside it names the
-# current build: get.sh reads it, then downloads that zip, and a re-run can tell
-# an update from what is already installed. scripts/publish-ba-app.sh does both
-# halves, and explains the order the files are replaced in.
+# Started by hand only (Actions → BA app → Run workflow). The repository is
+# private, where a Mac runner costs ten times its minutes: about twenty builds
+# use up a month's free minutes. So after a merge, publish from your own Mac
+# instead, for free:  ./scripts/publish-ba-app.sh
+#
+# Either way the app goes on one rolling release, tag `ba-app`, as
+# Claude-Dashboard-arm64-<build>.zip, with build.txt naming the current build
+# and get.sh itself. scripts/publish-ba-app.sh does both halves, and explains
+# the order the files are replaced in.
 name: BA app
 
 on:
-  push:
-    branches: [qargo-ba-edition]
   workflow_dispatch:
 
 permissions:

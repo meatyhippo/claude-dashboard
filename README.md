@@ -16,15 +16,23 @@ what it adds is in [BA-EDITION.md](BA-EDITION.md).
 
 ### Install on a Mac, nothing else needed
 
-Paste this into Terminal (Apple silicon Macs, macOS 13 or later):
+For Apple silicon Macs with macOS 13 or later. The repository is private, so you need a
+GitHub account that has been invited to it.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/MathijsRochus/claude-dashboard/qargo-ba-edition/get.sh | bash
-```
+1. Accept the invitation (the e-mail from GitHub, or
+   [github.com/MathijsRochus/claude-dashboard/invitations](https://github.com/MathijsRochus/claude-dashboard/invitations)).
+2. Signed in to GitHub in your browser, download
+   [get.sh](https://github.com/MathijsRochus/claude-dashboard/releases/download/ba-app/get.sh).
+3. Run it in Terminal:
 
-No git, Homebrew, Node or Bun. It installs Claude Code with Anthropic's installer if you
-don't have it and signs you in, downloads the app (built by GitHub from this repository)
-into `/Applications`, and asks how you want to use it:
+   ```bash
+   bash ~/Downloads/get.sh
+   ```
+
+No git, Homebrew, Node or Bun. It signs you in to GitHub in your browser (with GitHub's
+`gh` tool, which it fetches if you don't have it), installs Claude Code with Anthropic's
+installer if you don't have it and signs you in, downloads the app from the `ba-app`
+release into `/Applications`, and asks how you want to use it:
 
 | | what you get |
 | --- | --- |
@@ -32,10 +40,19 @@ into `/Applications`, and asks how you want to use it:
 | **Browser** | a tab at **http://localhost:5757**; the dashboard starts by itself when you log in |
 
 Both are the same dashboard with the same data in `~/.claude-dashboard`: the app's window
-shows that page, and you can switch by running the line again. **To update, run the same
-line again.** It asks before it stops a running dashboard, since that ends its sessions
-(they stay in History, to resume). Skip the questions with `… | bash -s -- --app` or
-`--browser`, and `--yes`.
+shows that page, and you can switch by running it again. **To update, run
+`bash ~/.claude-dashboard/get.sh`**: it keeps the newest copy of itself there. It asks
+before it stops a running dashboard, since that ends its sessions (they stay in History,
+to resume). Skip the questions with `--app` or `--browser`, and `--yes`, after the file name.
+
+With `gh` signed in already, one line installs or updates:
+`gh release download ba-app -R MathijsRochus/claude-dashboard -p get.sh -O - | bash`
+
+**Publishing a new build** (after a merge into `qargo-ba-edition`): run
+`./scripts/publish-ba-app.sh` on an Apple silicon Mac. It builds the app and replaces the
+release's files in an order that never breaks an install under way. The GitHub workflow
+does the same, but only when started by hand: Mac runners in a private repository use up
+the free minutes in about twenty builds.
 
 To remove it: delete the app, and in browser mode also
 `launchctl bootout gui/$(id -u)/com.qargo.claude-dashboard; rm ~/Library/LaunchAgents/com.qargo.claude-dashboard.plist`.

@@ -7,16 +7,16 @@ on top of it. Rein's README, branding, app name and behaviour are unchanged.
 
 ## Install
 
-On a Mac (Apple silicon, macOS 13 or later), paste into Terminal; run it again to update:
+On a Mac (Apple silicon, macOS 13 or later), with a GitHub account invited to this
+repository: download [get.sh](https://github.com/MathijsRochus/claude-dashboard/releases/download/ba-app/get.sh)
+and run `bash ~/Downloads/get.sh` in Terminal. To update: `bash ~/.claude-dashboard/get.sh`.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/MathijsRochus/claude-dashboard/qargo-ba-edition/get.sh | bash
-```
-
-It needs nothing installed first. GitHub builds the app on every push to this branch
-(`.github/workflows/ba-app.yml`) and publishes it on the rolling `ba-app` release, which
-`get.sh` downloads. When GitHub has no macOS runner free, `./scripts/publish-ba-app.sh` does
-the same from any Apple silicon Mac. Details in the README's Quick start.
+It needs nothing installed first, and signs you in to GitHub in the browser. After a merge
+into this branch, `./scripts/publish-ba-app.sh` builds the app on an Apple silicon Mac and
+publishes it, with `get.sh`, on the rolling `ba-app` release. The GitHub workflow
+(`.github/workflows/ba-app.yml`) does the same when started by hand; it doesn't run on
+push, since Mac runners in a private repository cost ten times their minutes. Details in
+the README's Quick start.
 
 ## Off until you switch it on
 

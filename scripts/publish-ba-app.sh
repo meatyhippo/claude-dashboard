@@ -1,20 +1,23 @@
 #!/usr/bin/env bash
 # Build the BA edition's Mac app and publish it on the rolling `ba-app` release
-# that get.sh downloads.
+# that get.sh downloads, together with get.sh itself.
 #
 #   ./scripts/publish-ba-app.sh                     build, then publish to origin's repository
 #   ./scripts/publish-ba-app.sh --repo owner/name   publish somewhere else (a fork, to test)
 #   ./scripts/publish-ba-app.sh --build-only        build into build/ba-app, publish nothing
 #   ./scripts/publish-ba-app.sh --no-build          publish what is in build/ba-app
 #
-# The GitHub workflow (.github/workflows/ba-app.yml) runs --build-only on a Mac,
-# then --no-build. Run it yourself when GitHub has no Mac runner free. Building
-# needs bun and an Apple silicon Mac; publishing needs the gh CLI with write access.
+# Run it on your own Mac after a merge into qargo-ba-edition: the repository is
+# private, where GitHub's Mac runners cost ten times their minutes, so the GitHub
+# workflow (.github/workflows/ba-app.yml, --build-only then --no-build) only runs
+# when started by hand. Building needs bun and an Apple silicon Mac; publishing
+# needs the gh CLI with write access.
 #
 # Every build is a file of its own, Claude-Dashboard-arm64-<build>.zip, and
 # build.txt names the current one. A publish uploads the new zip, then switches
-# build.txt, then deletes all but the newest two zips. An install never finds
-# build.txt naming a zip that is not there, and one that is under way keeps its file.
+# build.txt, then replaces get.sh, then deletes all but the newest two zips. An
+# install never finds build.txt naming a zip that is not there, and one that is
+# under way keeps its file. get.sh is the one from the commit the build came from.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -33,7 +36,7 @@ while [ $# -gt 0 ]; do
     --repo) REPO="${2:?--repo needs owner/name}"; shift ;;
     --no-build) BUILD_IT=0 ;;
     --build-only) PUBLISH_IT=0 ;;
-    -h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) bad "unknown option: $1"; exit 1 ;;
   esac
   shift
@@ -59,6 +62,7 @@ if [ "$BUILD_IT" = 1 ]; then
   # What publishing needs, kept with the build: its name, and the commit it was built from.
   echo "$BUILD" >"$OUT/build.txt"
   git rev-parse HEAD >"$OUT/commit.txt"
+  git show HEAD:get.sh >"$OUT/get.sh"
   ok "built $BUILD in $OUT"
 fi
 [ "$PUBLISH_IT" = 1 ] || exit 0
@@ -75,6 +79,7 @@ case "$BUILD" in *[!A-Za-z0-9._-]*) bad "unexpected build name: $BUILD"; exit 1 
 ZIP="$OUT/$PREFIX-$BUILD.zip"
 NAME="$(basename "$ZIP")"
 [ -f "$ZIP" ] || { bad "no $ZIP; build first"; exit 1; }
+[ -s "$OUT/get.sh" ] || { bad "no $OUT/get.sh; build first"; exit 1; }
 
 step "Publishing $BUILD to $REPO"
 
@@ -128,6 +133,12 @@ put_build() {
   [ "$(current_build || true)" = "$2" ]
 }
 switch_build() { put_build "$OUT" "$BUILD"; }
+# Also replaced with --clobber, so for a moment there is none: get.sh then keeps
+# using the copy it saved of itself.
+put_installer() {
+  gh release upload "$TAG" --repo "$REPO" "$OUT/get.sh" --clobber >/dev/null 2>&1 || true
+  [ "$(uploaded_size get.sh)" = "$(wc -c <"$OUT/get.sh" | tr -d ' ')" ]
+}
 restore_build() { put_build "$OUT/previous" "$PREVIOUS"; }
 
 # The tag follows the commit the build came from; the commit has to be on GitHub.
@@ -135,10 +146,18 @@ if ! retry gh api "repos/$REPO/commits/$SHA" --silent; then
   bad "commit ${SHA:0:7} is not on $REPO yet; push it first"
   exit 1
 fi
-NOTES="Built from ${SHA:0:7} ($BUILD). Install or update on a Mac (Apple silicon, macOS 13 or later) with:
+NOTES="Built from ${SHA:0:7} ($BUILD). For Macs with Apple silicon and macOS 13 or later.
+
+**Install:** download [get.sh](https://github.com/$REPO/releases/download/$TAG/get.sh), then run it in Terminal:
 
 \`\`\`
-curl -fsSL https://raw.githubusercontent.com/$REPO/qargo-ba-edition/get.sh | bash
+bash ~/Downloads/get.sh
+\`\`\`
+
+**Update:**
+
+\`\`\`
+bash ~/.claude-dashboard/get.sh
 \`\`\`"
 retry move_tag || { bad "could not move the $TAG tag"; exit 1; }
 retry have_release || { bad "could not create the $TAG release"; exit 1; }
@@ -171,6 +190,8 @@ if ! retry switch_build; then
   exit 1
 fi
 ok "build.txt names $BUILD"
+# Updates keep working without it (get.sh keeps a copy of itself); first installs need it.
+if retry put_installer; then ok "uploaded get.sh"; else warn "get.sh did not upload, so first installs cannot download it; run this again"; fi
 retry gh release edit "$TAG" --repo "$REPO" --notes "$NOTES" --latest=false >/dev/null ||
   warn "the release notes still describe the build before"
 
