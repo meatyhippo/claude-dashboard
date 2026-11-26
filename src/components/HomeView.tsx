@@ -20,6 +20,7 @@ import { buildTree, STATUS_LABEL, type SidebarSession } from "./sidebar/sessions
 import { dayLabel, TaskQuickAdd } from "./tasks/TaskQuickAdd.tsx";
 import { TodayMeetings } from "./tasks/TasksView.tsx";
 import { WbDigestCard } from "./WorkbenchView.tsx";
+import { QargoMcpBanner } from "./QargoMcpBanner.tsx";
 import { baFlags } from "../baFlags.ts";
 
 const UPCOMING_SHOWN = 8;
@@ -169,6 +170,7 @@ export function HomeView({
 
   return (
     <div className="home">
+      <QargoMcpBanner />
       <header className="home-head">
         <div>
           <h1>{new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}</h1>
