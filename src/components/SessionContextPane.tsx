@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { BaCustomer, BaRequirement, BaTicket } from "../../shared/baCustomers.ts";
-import { agentApi, baApi, type TimelineItem } from "../api.ts";
+import { agentApi, baApi, terminalApi, type TimelineItem } from "../api.ts";
+import { terminalKey, type WorkspaceTerminal } from "../../shared/terminals.ts";
 import { Reader } from "./InboxView.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { fileTab, Workbench } from "./workbench/Workbench.tsx";
@@ -108,6 +109,7 @@ export default function SessionContextPane({ agentKey, sessionId, cwd, wide }: {
   const [wbTab, setWbTab] = useState("session");
   const [pos, setPos] = useScxPos();
   const [reqs, setReqs] = useState<BaRequirement[] | null>(null);
+  const [shells, setShells] = useState<WorkspaceTerminal[]>([]);
 
   useEffect(() => {
     void baApi
@@ -182,6 +184,27 @@ export default function SessionContextPane({ agentKey, sessionId, cwd, wide }: {
   }, [notionWrites]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** Files this session wrote or edited, relative to the customer folder, with their edits. */
+  // The Files tab's terminal panel: the shells open in the customer's folder (not
+  // filed under a workspace). Re-read while the tab shows, so a shell ended from
+  // the panel's tab, or opened elsewhere in the same folder, follows.
+  const filesShown = tab === "files";
+  useEffect(() => {
+    const folder = ctx?.folder?.replace(/\/$/, "");
+    if (!filesShown || !folder) return;
+    let stale = false;
+    const load = () =>
+      void terminalApi
+        .list()
+        .then((r) => !stale && setShells(r.terminals.filter((t) => t.workspaceId === null && t.folder.replace(/\/$/, "") === folder)))
+        .catch(() => {});
+    load();
+    const t = setInterval(load, 5000);
+    return () => {
+      stale = true;
+      clearInterval(t);
+    };
+  }, [filesShown, ctx?.folder]);
+
   const touched = useMemo(() => {
     const out = new Map<string, { kind: string; edits: { old: string; new: string }[] }>();
     const root = ctx?.folder ? `${ctx.folder.replace(/\/$/, "")}/` : null;
@@ -399,8 +422,14 @@ export default function SessionContextPane({ agentKey, sessionId, cwd, wide }: {
             onActive={setWbTab}
             changed={new Map([...touched].map(([rel, t]) => [rel, t.kind]))}
             stamp={String(touched.size)}
-            terminals={[]}
-            onNewTerminal={() => {}}
+            terminals={shells.map((t) => ({ id: terminalKey(t.id), title: t.title }))}
+            onNewTerminal={() => {
+              if (!ctx.folder) return;
+              void terminalApi
+                .create(ctx.folder, null)
+                .then((r) => setShells((s) => [...s.filter((x) => x.id !== r.terminal.id), r.terminal]))
+                .catch(() => {});
+            }}
           />
         </div>
       )}
