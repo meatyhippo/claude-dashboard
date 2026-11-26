@@ -24,6 +24,8 @@ const daemon = locateDaemon(process.resourcesPath, app.isPackaged, process.env.D
 let win: BrowserWindow | null = null;
 let stopping = false;
 let respawns = 0;
+/** Since when the daemon has answered every check: a minute of health forgives earlier respawns. */
+let healthySince = 0;
 let watching: NodeJS.Timeout | null = null;
 /** A link that arrived before the window existed. */
 let pendingHash: string | null = null;
@@ -225,7 +227,14 @@ function watchDaemon() {
   if (watching) clearInterval(watching);
   watching = setInterval(() => {
     void (async () => {
-      if (stopping || (await health())) return;
+      if (stopping) return;
+      if (await health()) {
+        // A restart on purpose (an update) is not a crash: only a daemon that keeps dying counts.
+        healthySince ||= Date.now();
+        if (respawns && Date.now() - healthySince > 60_000) respawns = 0;
+        return;
+      }
+      healthySince = 0;
       if (respawns >= RESPAWN_LIMIT) {
         if (watching) clearInterval(watching);
         fatal(`The daemon stopped ${RESPAWN_LIMIT} times; giving up.\n\nIts log is at ${LOG_PATH}.`);

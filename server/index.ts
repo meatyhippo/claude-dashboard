@@ -134,6 +134,7 @@ import {
   SCRATCH_DIR,
   SESSIONS_DIR,
   slugToPath,
+  IS_DEV_COPY,
 } from "./paths.ts";
 import { handlePrRoute } from "./prRoutes.ts";
 import { initPrWatch } from "./prWatch.ts";
@@ -394,7 +395,7 @@ initWb(db);
 // Workbench: every hour, check Front for replies on tickets that wait on the customer.
 setInterval(() => {
   const f = wbFlags();
-  if (f.enabled && f.workbench) void wbScanAwaiting().catch(() => {});
+  if (f.enabled && f.workbench && !IS_DEV_COPY) void wbScanAwaiting().catch(() => {});
 }, 3_600_000);
 initNotes(db);
 setNotesDir(settings.ui.notesRoot ?? "");

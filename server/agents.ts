@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync,
 import { join, sep } from "node:path";
 import { claudeEnv, DATA_DIR } from "./paths.ts";
 import { scanCommands } from "./commands.ts";
+import { getBaFlags } from "./baEdition.ts";
 import {
   query,
   renameSession,
@@ -79,6 +80,7 @@ export type TimelineItem = (
       structured?: unknown;
     }
   | { kind: "error"; ts: number; text: string; /** Connectors this session needs signed in again, offered as buttons. */ connect?: string[] }
+  | { kind: "notice"; ts: number; text: string }
 ) & { agentId?: string };
 
 /**
@@ -375,6 +377,40 @@ export function listAgents() {
   return [...agents.values()].sort((a, b) => b.updatedAt - a.updatedAt).map(agentSummary);
 }
 
+/**
+ * A connector signed in after a chat started (Qargo MCP drops its sign-in every day) is
+ * reconnected inside the running chat: same process, same conversation, its tools back.
+ * Chats mid-turn are done when their turn ends. With `only`, just that chat.
+ */
+const reconnectLater = new Map<string, Set<string>>();
+export async function reconnectConnector(name: string, only?: string): Promise<{ key: string; ok: boolean; tools: number; error?: string }[]> {
+  const out: { key: string; ok: boolean; tools: number; error?: string }[] = [];
+  const status = async (a: Agent) => ((await a.q.mcpServerStatus()) as { name: string; status: string; tools?: unknown[] }[]).find((sv) => sv.name === name);
+  const count = (sv: { tools?: unknown[] } | undefined) => (Array.isArray(sv?.tools) ? sv!.tools!.length : 0);
+  for (const a of agents.values()) {
+    if (only && a.key !== only) continue;
+    if (a.status === "ended" || a.status === "error" || a.status === "starting") continue;
+    if (a.status === "thinking" || a.status === "awaiting-permission") {
+      reconnectLater.set(a.key, new Set([...(reconnectLater.get(a.key) ?? []), name]));
+      continue;
+    }
+    try {
+      const before = await status(a);
+      if (!before) continue; // this chat does not load that connector
+      if (before.status === "connected" && count(before) > 0) continue;
+      await a.q.reconnectMcpServer(name);
+      const after = await status(a);
+      const ok = after?.status === "connected" && count(after) > 0;
+      out.push({ key: a.key, ok, tools: count(after) });
+      console.log(`[mcp] ${a.title ?? a.cwd}: reconnected ${name} → ${after?.status ?? "?"} (${count(after)} tools)`);
+      if (ok) append(a, { kind: "notice", ts: Date.now(), text: `✓ ${name.replace(/^claude\.ai /, "")} is connected again in this chat (${count(after)} tools). Carry on: no restart needed.` });
+    } catch (e) {
+      out.push({ key: a.key, ok: false, tools: 0, error: (e as Error)?.message });
+    }
+  }
+  return out;
+}
+
 /** A running session's connectors as the CLI sees them now: name, status, tool count. */
 export async function agentConnectors(key: string): Promise<{ name: string; status: string; tools: number; error?: string }[] | null> {
   const a = agents.get(key);
@@ -407,6 +443,12 @@ function touch(a: Agent, status?: AgentStatus) {
   // still emits its result, which would otherwise flip the status back to idle.
   const settled = a.endedAt !== null;
   if (status && (!settled || status === "ended" || status === "error")) a.status = status;
+  // A connector signed in while this chat was mid-turn: reconnect it now the turn is over.
+  if (a.status === "idle" && reconnectLater.has(a.key)) {
+    const names = reconnectLater.get(a.key)!;
+    reconnectLater.delete(a.key);
+    for (const n of names) void reconnectConnector(n, a.key);
+  }
   if (a.sessionId) saveRestorable();
   emitRoster();
 }
@@ -691,6 +733,20 @@ const RESEARCH_OPTIONS: Pick<Options, "settingSources" | "skills" | "disallowedT
 };
 
 /**
+ * BA edition: a research chat that keeps the org's skills. Same tool fence, but the
+ * skill catalogue stays (no `skills: []`), so the qargo / professional-services
+ * skills are offered and listed in the chat's / menu.
+ */
+const RESEARCH_WITH_SKILLS: Pick<Options, "settingSources" | "disallowedTools"> = {
+  settingSources: RESEARCH_OPTIONS.settingSources,
+  disallowedTools: RESEARCH_OPTIONS.disallowedTools,
+};
+const baChatSkills = () => {
+  const f = getBaFlags();
+  return f.enabled && f.chatSkills;
+};
+
+/**
  * The name a session already goes by. Resuming starts a new agent record, and the
  * CLI ignores `title` on resume, so without this a resume from a caller that does
  * not re-supply the name comes back nameless and the views fall back to its path.
@@ -740,12 +796,13 @@ export function startAgent(opts: StartOptions): string {
     q: null as unknown as Query,
   };
 
+  const researchWithSkills = opts.research === true && baChatSkills();
   agent.q = query({
     prompt: queue,
     options: {
       env: claudeEnv(),
       cwd: opts.cwd,
-      ...(opts.research ? RESEARCH_OPTIONS : {}),
+      ...(opts.research ? (researchWithSkills ? RESEARCH_WITH_SKILLS : RESEARCH_OPTIONS) : {}),
       model: opts.model,
       permissionMode: opts.permissionMode ?? "default",
       // The CLI refuses bypassPermissions unless it was allowed at spawn time, so
@@ -759,7 +816,8 @@ export function startAgent(opts: StartOptions): string {
       allowedTools: opts.allowedTools,
       mcpServers: opts.mcpServers,
       // Research sessions are deliberately bare; every other one gets the org's skills.
-      plugins: opts.research ? undefined : orgPlugins(),
+      // BA edition (flag chatSkills): a chat without a folder gets them as well.
+      plugins: opts.research && !researchWithSkills ? undefined : orgPlugins(),
       ...(opts.research ? {} : { systemPrompt: { type: "preset" as const, preset: "claude_code" as const, append: DRAFT_RULE } }),
       outputFormat: opts.outputSchema ? { type: "json_schema", schema: opts.outputSchema } : undefined,
       includePartialMessages: true,
@@ -997,7 +1055,7 @@ function checkConnectors(agent: Agent) {
     append(agent, {
       kind: "error",
       ts: Date.now(),
-      text: `This chat has no Qargo tools (${why}). Claude Code keeps its own sign-in to each connector, apart from the Claude app and claude.ai: sign in below, then start the chat again.`,
+      text: `This chat has no Qargo tools (${why}). Claude Code keeps its own sign-in to each connector, apart from the Claude app and claude.ai: sign in below: the chat picks the tools up by itself, with its conversation intact.`,
       connect: qargo.filter((sv) => sv.status !== "connected" || n(sv) === 0).map((sv) => sv.name),
     });
   }, 20_000);
@@ -1515,6 +1573,11 @@ export async function restartAgent(key: string): Promise<{ key: string } | { err
   if (!existsSync(cwd)) return { error: `${cwd} no longer exists` };
   if (a.status !== "ended" && a.status !== "error") await stopAgent(key, "restarted from the dashboard");
   forgetAgent(key);
+  // A feature's own session (a Workbench ticket chat) comes back through that feature, with its tools.
+  for (const hook of restoreHooks) {
+    const k = hook(cwd, sessionId);
+    if (k) return { key: k };
+  }
   return {
     key: startAgent({
       cwd,

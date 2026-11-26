@@ -4,7 +4,7 @@ import { replyOf, type CalendarEvent } from "../shared/calendar.ts";
 import { listEvents } from "./calendarSources.ts";
 import { connectorCalendarOn } from "./baCalendar.ts";
 import { fireEvent } from "./notify.ts";
-import { DATA_DIR } from "./paths.ts";
+import { DATA_DIR, IS_DEV_COPY } from "./paths.ts";
 import { getSettings } from "./settings.ts";
 
 const STORE_PATH = join(DATA_DIR, "calendar-watch.json");
@@ -153,6 +153,7 @@ function tick() {
 
 /** Watches your calendars for new invitations and for meetings about to start. */
 export function initCalendarWatch() {
+  if (IS_DEV_COPY) return; // the installed app already reminds you
   const safely = (work: () => void | Promise<void>, what: string) => async () => {
     try {
       await work();

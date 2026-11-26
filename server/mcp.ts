@@ -287,6 +287,8 @@ export function startMcpLogin(name: string): { ok: boolean; error: string | null
       // The list is now wrong either way — a success flips a status, a failure may
       // have left a detail worth reading.
       if (code === 0) void refreshMcp();
+      // Open chats pick the connector up in place (imported late: agents.ts imports this file's neighbours).
+      if (code === 0) void import("./agents.ts").then((m) => m.reconnectConnector(name)).catch(() => {});
     })();
 
     return { ok: true, error: null };
