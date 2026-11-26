@@ -328,9 +328,11 @@ export type BaFlags = {
   directConnectors: boolean;
   /** Send a session to a colleague over Slack, and import one they sent. */
   handoff: boolean;
+  /** A chat without a folder ("New chat") gets the org's skills and plugins too. */
+  chatSkills: boolean;
 };
 
-export const DEFAULT_BA_FLAGS: BaFlags = { enabled: false, feedback: false, customers: true, inbox: true, delivery: true, workbench: true, qai: true, diagrams: true, published: true, qargoMcp: true, calendar: true, cloudSessions: false, directConnectors: false, handoff: true };
+export const DEFAULT_BA_FLAGS: BaFlags = { enabled: false, feedback: false, customers: true, inbox: true, delivery: true, workbench: true, qai: true, diagrams: true, published: true, qargoMcp: true, calendar: true, cloudSessions: false, directConnectors: false, handoff: true, chatSkills: true };
 
 export const BA_FLAG_INFO: { key: Exclude<keyof BaFlags, "enabled">; label: string; hint: string }[] = [
   { key: "customers", label: "Customers from Notion", hint: "Projects become customers: My deals, Requirements and Front tabs, IR workspaces" },
@@ -345,6 +347,7 @@ export const BA_FLAG_INFO: { key: Exclude<keyof BaFlags, "enabled">; label: stri
   { key: "published", label: "Published artifacts", hint: "Your claude.ai artifacts beside the local ones and on customer pages" },
   { key: "directConnectors", label: "Direct connector calls (experimental)", hint: "Notion, Front and Slack reads go straight to your claude.ai connectors with Claude Code's sign-in, without a Claude session: about 1 s instead of 3 to 20 s. Uses an undocumented connection that a Claude Code update can break; any failure falls back to the normal way" },
   { key: "handoff", label: "Session handoff", hint: "Send a session to a colleague in a Slack DM from its ⋮ menu; they import it from History and carry on" },
+  { key: "chatSkills", label: "Org skills in chats", hint: "A chat without a folder (New chat, Home) loads the org's skills and plugins (qargo, professional-services, engineering…) like a session in a folder. Off: such chats stay bare, as in the original dashboard" },
   { key: "feedback", label: "Feedback mode", hint: "A Feedback button that pins notes to any part of the page, saved for the next round of changes" },
 ];
 
