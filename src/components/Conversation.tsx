@@ -1585,9 +1585,12 @@ const Item = memo(function Item({
       );
     }
 
+    case "notice":
+      return <div className="chat-notice">{item.text}</div>;
+
     case "error":
       return (
-        <div className={`chat-error${item.text.startsWith("✓") ? " ok" : ""}`}>
+        <div className="chat-error">
           {item.text}
           {item.connect?.length ? <ConnectorSignIn names={item.connect} /> : null}
         </div>

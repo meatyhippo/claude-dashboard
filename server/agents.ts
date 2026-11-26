@@ -79,6 +79,7 @@ export type TimelineItem = (
       structured?: unknown;
     }
   | { kind: "error"; ts: number; text: string; /** Connectors this session needs signed in again, offered as buttons. */ connect?: string[] }
+  | { kind: "notice"; ts: number; text: string }
 ) & { agentId?: string };
 
 /**
@@ -401,7 +402,7 @@ export async function reconnectConnector(name: string, only?: string): Promise<{
       const ok = after?.status === "connected" && count(after) > 0;
       out.push({ key: a.key, ok, tools: count(after) });
       console.log(`[mcp] ${a.title ?? a.cwd}: reconnected ${name} → ${after?.status ?? "?"} (${count(after)} tools)`);
-      if (ok) append(a, { kind: "error", ts: Date.now(), text: `✓ ${name.replace(/^claude\.ai /, "")} is connected again in this chat (${count(after)} tools). Carry on: no restart needed.` });
+      if (ok) append(a, { kind: "notice", ts: Date.now(), text: `✓ ${name.replace(/^claude\.ai /, "")} is connected again in this chat (${count(after)} tools). Carry on: no restart needed.` });
     } catch (e) {
       out.push({ key: a.key, ok: false, tools: 0, error: (e as Error)?.message });
     }

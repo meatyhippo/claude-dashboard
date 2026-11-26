@@ -326,7 +326,7 @@ function frontQueryOf(t: WbTicket): { query: string; projectId: number | null } 
         const th = peekCache<BaMailThread>(`thread:${id}`);
         return (th?.entries ?? []).flatMap((e) => [e.fromAddress ?? "", ...e.to]).filter((x) => /@/.test(x)).map((x) => domainOf(x.toLowerCase()));
       // Our own domain and tools that send mail (Notion, Google, Slack…) say nothing about the customer.
-      }).filter((d): d is string => !!d && !/qargo\.|notion\.so|google\.com|gmail\.com|frontapp|slack|atlassian|hubspot|zoom\.us|microsoft|outlook\.com/i.test(d)),
+      }).filter((d): d is string => !!d && !/(^|\.)(qargo\.[a-z.]+|notion\.so|google\.com|gmail\.com|frontapp\.com|slack\.com|atlassian\.(net|com)|hubspot\.com|hubspotemail\.net|zoom\.us|microsoft\.com|outlook\.com)$/i.test(d)),
     ),
   ];
   const short = t.customer.replace(/\b(limited|ltd|bv|b\.v\.|nv|n\.v\.|gmbh|sa|group|partnership|global|logistics?|transport|services)\b\.?/gi, " ").replace(/[^\p{L}\p{N}&' -]/gu, " ").replace(/\s+/g, " ").trim();
@@ -462,6 +462,8 @@ async function autoFrontSearch(rows: WbTicket[], force = false) {
   frontAutoRun = Date.now();
   const done = kv<Record<string, number>>("frontAuto", {});
   const dismissed = kv<Record<string, string[]>>("frontDismissed", {});
+  // Threads taken off a ticket by hand are never suggested or linked again by the background search.
+  const hidden = kv<Record<string, string[]>>("frontHidden", {});
   const due = rows.filter((t) => {
     if (!force && Date.now() - (done[t.url] ?? 0) < 12 * 3_600_000) return false;
     const c = contactOf(t);
@@ -478,7 +480,7 @@ async function autoFrontSearch(rows: WbTicket[], force = false) {
     if (!got.has(qs[0]!)) continue;
     mapPut("frontAuto", t.url, Date.now());
     const since = contactOf(t)?.at ?? 0;
-    const skip = new Set(dismissed[t.url] ?? []);
+    const skip = new Set([...(dismissed[t.url] ?? []), ...(hidden[t.url] ?? [])]);
     const newer = frontResults(t, qs.map((q) => got.get(q) ?? "")).filter((x) => !x.linked && !skip.has(x.id) && (x.updatedAt ?? 0) > since && x.score >= 2 && !x.other);
     const query = searchLabel(t);
     if (!newer.length) {
@@ -487,7 +489,7 @@ async function autoFrontSearch(rows: WbTicket[], force = false) {
     }
     const [top, second] = newer;
     if (top!.score >= 4 && (second?.score ?? 0) <= top!.score - 2) {
-      await wbFrontUse(t.url, top!).catch(() => null);
+      await wbFrontUse(t.url, top!, true, false).catch(() => null);
       console.log(`[wb] front auto: ${t.task} ← ${top!.subject} (${top!.why.join(", ")})`);
       const rest = newer.slice(1).filter((x) => (x.updatedAt ?? 0) > (top!.updatedAt ?? 0));
       mapPut("frontAsk", t.url, rest.length ? { at: Date.now(), query, threads: rest.slice(0, 6) } : null);
@@ -507,16 +509,21 @@ export function wbFrontDismiss(url: string) {
 }
 
 /** Tie a Front conversation to the ticket's request, so Last contact counts it. */
-export async function wbFrontUse(url: string, thread: BaFrontThread, read = true): Promise<{ ok: boolean; error?: string }> {
+/** `unhide`: a person put the thread back (picker, pasted link); the background search never does. */
+export async function wbFrontUse(url: string, thread: BaFrontThread, read = true, unhide = true): Promise<{ ok: boolean; error?: string }> {
   const t = ticketOf(url);
   if (!t) return { ok: false, error: "ticket not found" };
+  const hidden = kv<Record<string, string[]>>("frontHidden", {})[url] ?? [];
+  if (hidden.includes(thread.id)) {
+    if (!unhide) return { ok: false, error: "taken off this ticket by hand" };
+    mapPut("frontHidden", url, hidden.filter((x) => x !== thread.id));
+  }
   const projectId = projectOfTicket(t);
   // Placed on the customer (so the Inbox knows it too) when the ticket's deal is under one; always remembered on the ticket.
   if (projectId && t.request) linkThread(thread, projectId, t.request, "manual");
   const extra = kv<Record<string, string[]>>("extraThreads", {});
   mapPut("extraThreads", url, [...new Set([...(extra[url] ?? []), thread.id])]);
-  const hidden = kv<Record<string, string[]>>("frontHidden", {})[url] ?? [];
-  if (hidden.includes(thread.id)) mapPut("frontHidden", url, hidden.filter((x) => x !== thread.id));
+
   const ask = kv<Record<string, WbFrontAsk | null>>("frontAsk", {})[url];
   if (ask) {
     const rest = ask.threads.filter((x) => x.id !== thread.id && (x.updatedAt ?? 0) > (thread.updatedAt ?? 0));
@@ -530,7 +537,8 @@ export async function wbFrontUse(url: string, thread: BaFrontThread, read = true
 function askOf(t: WbTicket, ask: WbFrontAsk | null | undefined): WbFrontAsk | null {
   if (!ask) return null;
   const on = new Set(contactThreads(t).cnv);
-  const threads = ask.threads.filter((x) => !on.has(x.id));
+  const off = new Set(kv<Record<string, string[]>>("frontHidden", {})[t.url] ?? []);
+  const threads = ask.threads.filter((x) => !on.has(x.id) && !off.has(x.id));
   return threads.length ? { ...ask, threads } : null;
 }
 

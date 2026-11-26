@@ -246,6 +246,7 @@ export type TimelineItem = (
       structured?: unknown;
     }
   | { kind: "error"; ts: number; text: string; connect?: string[] }
+  | { kind: "notice"; ts: number; text: string }
 ) & { agentId?: string };
 
 /** A subagent spawned by the Task tool inside a session. */
