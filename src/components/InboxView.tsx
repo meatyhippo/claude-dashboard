@@ -7,6 +7,7 @@ import { baFlags } from "../baFlags.ts";
 import { ago, IrPicker, useAction } from "./CustomerPanels.tsx";
 import { MailComposer, type ComposerHandle } from "./MailComposer.tsx";
 import { RunWhere } from "./RunWhere.tsx";
+import { MailWorkspacePicker } from "./MailWorkspace.tsx";
 import { cleanMail } from "../../shared/mailClean.ts";
 
 /**
@@ -317,6 +318,7 @@ export function Reader({
                 {t.link_?.source === "auto" && <span className="ba-muted"> (placed automatically)</span>}
               </span>
               <IrPicker projectId={placedAt} value={t.link_?.irUrl ?? null} onChange={(u) => void placeAt(placedAt, u)} />
+              <MailWorkspacePicker key={`${t.id}:${placedAt}`} thread={t} projectId={placedAt} />
               <button className="icon-btn ghost" onClick={() => void placeAt(null, null)}>
                 Unplace
               </button>
