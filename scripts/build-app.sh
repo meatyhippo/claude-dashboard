@@ -133,13 +133,14 @@ xattr -cr "$APP" 2>/dev/null || true
 sign() { codesign --force --sign "$SIGN_ID" --entitlements scripts/entitlements.plist --timestamp=none "$@" 2>/dev/null; }
 # Inside out, and never --deep: Claude Code and bun keep their makers' signatures,
 # which is what their Keychain access and their notarisation hang on.
-while IFS= read -r f; do
+find "$APP" -type f | while IFS= read -r f; do
   case "$f" in
     */claude-agent-sdk-darwin-arm64/claude|*/Contents/Resources/bun) continue ;;
   esac
   if file -b "$f" | grep -q "Mach-O"; then sign "$f"; fi
-done < <(find "$APP" -type f)
-while IFS= read -r b; do sign "$b"; done < <(find "$APP" \( -name "*.framework" -o -name "*.app" \) | awk '{print gsub("/","/"), $0}' | sort -rn | cut -d' ' -f2-)
+done
+find "$APP" \( -name "*.framework" -o -name "*.app" \) | awk '{print gsub("/","/"), $0}' | sort -rn | cut -d' ' -f2- \
+  | while IFS= read -r b; do sign "$b"; done
 codesign --verify --strict "$APP"
 ok "verified"
 
