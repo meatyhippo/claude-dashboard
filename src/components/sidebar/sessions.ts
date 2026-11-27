@@ -115,6 +115,9 @@ export function buildSessions(opts: {
 
   for (const s of live?.sessions ?? []) {
     if (!s.alive) continue;
+    // The dashboard's own background helpers (mail reads, Front and Notion lookups) run in
+    // its scratch folder: they are not your chats, so they are not listed.
+    if (/\/\.claude-dashboard\/scratch\/?$/.test(s.cwd ?? "")) continue;
     const needs = s.status === "needs_input" || s.status === "waiting" || !!s.waitingFor;
     const working = s.status === "busy" || s.status === "running" || s.status === "thinking";
     out.push({

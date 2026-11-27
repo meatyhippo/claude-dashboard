@@ -145,7 +145,7 @@ function MailStyle() {
         className="ba-prompt"
         rows={8}
         value={text}
-        placeholder={"For example:\n- Short and friendly, no corporate phrases\n- Dutch-speaking customers: informal 'je', in Dutch\n- Start with 'Hi <first name>,' and end with 'Groeten,' / 'Kind regards,' and Mathijs"}
+        placeholder={"For example:\n- Short and friendly, no corporate phrases\n- Dutch-speaking customers: informal 'je', in Dutch\n- Start with 'Hi <first name>,', no sign-off (the signature adds it)"}
         onChange={(e) => {
           setText(e.target.value);
           setState("idle");

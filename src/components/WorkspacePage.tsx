@@ -22,6 +22,7 @@ import { WorkspaceServices } from "./services/WorkspaceServices.tsx";
 import type { ServicesState } from "../../shared/services.ts";
 import { rangeOfLayer, type StackLayer } from "../../shared/stacks.ts";
 import { useGitRepo } from "./useGitRepo.ts";
+import { WorkspaceMail } from "./MailWorkspace.tsx";
 
 
 /** The layer whose changes are on screen: one you picked, the whole branch (null), or the checkout's own (undefined). */
@@ -359,6 +360,7 @@ export function WorkspacePage({
                 </div>
               )}
             </section>
+            <WorkspaceMail workspaceId={workspace.id} onOpen={(key) => onOpenSession(key)} />
           </aside>
         </div>
       )}

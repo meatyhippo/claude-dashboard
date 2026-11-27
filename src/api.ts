@@ -1,4 +1,5 @@
 import type { BaAction, BaAgendaEvent, BaSlackPost, BaDealSuggestions, BaCustomer, BaDeal, BaFrontThread, BaIrSession, BaMailThread, BaMailView, BaPublished, BaReply, BaQaiQuestion, BaRequirement, BaTicket, BaTriageThread, Cached } from "../shared/baCustomers.ts";
+import type { WbDigest, WbFrontCand, WbRow } from "../shared/wb.ts";
 import type { WorkspaceTerminal } from "../shared/terminals.ts";
 export type { WorkspaceTerminal };
 import type {
@@ -172,6 +173,8 @@ export type SessionDetail = {
   prLinks: { pr_url: string; pr_number: number | null; repo: string | null }[];
   /** Null when the session has no priced usage events — not the same as zero. */
   receipt: SessionReceipt | null;
+  /** Front drafts the session created (from its transcript), for the chat's draft links. */
+  drafts?: { ts: number | null; conversationId: string | null; preview: string; update: boolean }[];
 };
 
 export type Overview = {
@@ -242,7 +245,8 @@ export type TimelineItem = (
       /** The turn's JSON answer, for a session started with an output schema. */
       structured?: unknown;
     }
-  | { kind: "error"; ts: number; text: string }
+  | { kind: "error"; ts: number; text: string; connect?: string[] }
+  | { kind: "notice"; ts: number; text: string }
 ) & { agentId?: string };
 
 /** A subagent spawned by the Task tool inside a session. */
@@ -1715,6 +1719,28 @@ const put = async <T,>(path: string, body: unknown): Promise<T> => {
 };
 const qs = (refresh?: boolean) => (refresh ? "?refresh=1" : "");
 
+export const wbApi = {
+  rows: (refresh?: boolean) => get<Cached<WbRow[]> & { mode: "auto" | "step"; viewAs?: WbViewAs | null }>(`/api/ba/wb/rows${refresh ? "?refresh=1" : ""}`),
+  people: (q: string) => get<{ viewAs: WbViewAs | null; people: WbViewAs[] }>(`/api/ba/wb/viewas?q=${encodeURIComponent(q)}`),
+  viewAs: (v: WbViewAs | null) => post<{ viewAs: WbViewAs | null }>("/api/ba/wb/viewas", { viewAs: v }),
+  digest: (refresh?: boolean) => get<Cached<WbDigest | null> & { scan: { at: number; hits: number } | null; sweep?: WbSweepState }>(`/api/ba/wb/digest${refresh ? "?refresh=1" : ""}`),
+  sweep: () => get<WbSweepState>("/api/ba/wb/sweep"),
+  runSweep: () => post<{ ok: boolean; error?: string }>("/api/ba/wb/sweep"),
+  pin: (url: string, on: boolean) => post<{ pins: Record<string, number> }>("/api/ba/wb/pin", { url, on }),
+  mode: (mode: "auto" | "step") => post<{ mode: string }>("/api/ba/wb/mode", { mode }),
+  state: (url: string, k: string | null) => post<{ ok: true }>("/api/ba/wb/state", { url, k }),
+  frontSearch: (url: string) => post<{ threads: WbFrontCand[]; query: string; projectId: number | null; error?: string }>("/api/ba/wb/front-search", { url }),
+  frontUse: (url: string, thread: BaFrontThread) => post<{ ok: boolean; error?: string }>("/api/ba/wb/front-use", { url, thread }),
+  frontDismiss: (url: string) => post<{ ok: boolean }>("/api/ba/wb/front-dismiss", { url }),
+  frontSet: (url: string, add: BaFrontThread[], remove: string[]) => post<{ ok: boolean; error?: string }>("/api/ba/wb/front-set", { url, add, remove }),
+  frontAdd: (url: string, ref: string) => post<{ ok: boolean; error?: string }>("/api/ba/wb/front-add", { url, ref }),
+  status: (url: string, status: string) => post<{ ok: true }>("/api/ba/wb/status", { url, status }),
+  run: (url: string, kind: "start" | "step" | "status" | "generate" | "scope" | "stop" | "chat" | "next" | "explain", order?: number) => post<{ ok: boolean; key: string | null; error?: string }>("/api/ba/wb/run", { url, kind, order }),
+  proposal: (url: string, approve: boolean) => post<{ ok: boolean }>("/api/ba/wb/proposal", { url, approve }),
+  step: (url: string, order: number, state: string) => post<{ ok: boolean }>("/api/ba/wb/step", { url, order, state }),
+  scan: () => post<{ hits: number }>("/api/ba/wb/scan", {}),
+};
+
 export const baApi = {
   myDeals: (refresh?: boolean) => get<Cached<BaDeal[]>>(`/api/ba/deals/mine${qs(refresh)}`),
   suggestDeals: () => get<BaDealSuggestions>("/api/ba/deals/suggest"),
@@ -1724,6 +1750,9 @@ export const baApi = {
   customers: () => get<{ customers: BaCustomer[] }>("/api/ba/customers"),
   createCustomer: (urls: string[], name?: string) => post<{ customer: BaCustomer }>("/api/ba/customers", { urls, name }),
   customer: (projectId: number) => get<{ customer: BaCustomer | null }>(`/api/ba/customers/${projectId}`),
+  strayDrawings: (projectId: number) =>
+    get<{ drawings: { path: string; rel: string; modified: number; size: number }[] }>(`/api/ba/customers/${projectId}/stray-drawings`),
+  adoptStrayDrawing: (projectId: number, path: string) => post<{ ok: true; name: string }>(`/api/ba/customers/${projectId}/stray-drawings`, { path }),
   setCustomer: (projectId: number, s: { frontQuery?: string; extraDomains?: string }) => put<{ customer: BaCustomer | null }>(`/api/ba/customers/${projectId}`, s),
   requirements: (projectId: number, refresh?: boolean) => get<Cached<BaRequirement[]>>(`/api/ba/customers/${projectId}/requirements${qs(refresh)}`),
   slack: (projectId: number, refresh?: boolean) => get<Cached<BaSlackPost[]>>(`/api/ba/customers/${projectId}/slack${qs(refresh)}`),
@@ -1735,6 +1764,12 @@ export const baApi = {
     post<{ ok: true; offerFrontLink?: boolean; currentFrontLink?: string | null }>("/api/ba/triage", { thread, projectId, irUrl, source }),
   setFrontLink: (irUrl: string, link: string, projectId?: number) => post<{ ok: true }>("/api/ba/ir/front-link", { irUrl, link, projectId }),
   untriage: (threadId: string) => baDel<{ ok: true }>(`/api/ba/triage?thread=${encodeURIComponent(threadId)}`),
+  /** The customer's workspaces a mail can belong to, and the one it is linked to. */
+  mailWorkspace: (threadId: string, projectId?: number | null) =>
+    get<{ workspaceId: number | null; workspaces: { id: number; title: string }[] }>(`/api/ba/mail-workspace?thread=${encodeURIComponent(threadId)}${projectId ? `&project=${projectId}` : ""}`),
+  setMailWorkspace: (threadId: string, workspaceId: number | null, place?: { projectId: number; thread: BaFrontThread }) =>
+    post<{ ok: true }>("/api/ba/mail-workspace", { threadId, workspaceId, ...(place ?? {}) }),
+  workspaceMail: (workspaceId: number) => get<{ projectId: number; threads: BaFrontThread[] }>(`/api/ba/workspace-mail?workspace=${workspaceId}`),
   published: () => get<{ published: BaPublished[]; snapshot: string }>("/api/ba/published"),
   action: (a: BaAction) => post<{ ok: true; key: string; cloud?: boolean; url?: string }>("/api/ba/action", a),
   threadFiles: (threadId: string, save?: boolean) => (save ? post<{ dir: string | null; rel: string | null; files: string[]; error?: string | null }>(`/api/ba/mail/thread/${threadId}/files`) : get<{ dir: string | null; rel: string | null; files: string[]; error?: string | null }>(`/api/ba/mail/thread/${threadId}/files`)),
@@ -1746,6 +1781,7 @@ export const baApi = {
   agenda: (days: number, refresh?: boolean) => get<Cached<BaAgendaEvent[]>>(`/api/ba/agenda?days=${days}${refresh ? "&refresh=1" : ""}`),
   mail: (view: BaMailView, refresh?: boolean) => get<Cached<BaTriageThread[]> & { seenIds: string[]; pending?: number }>(`/api/ba/mail?view=${view}${refresh ? "&refresh=1" : ""}`),
   thread: (id: string, refresh?: boolean) => get<Cached<BaMailThread>>(`/api/ba/mail/thread/${id}${qs(refresh)}`),
+  draft: (draftId: string) => get<{ text: string; to: string[] }>(`/api/ba/mail/draft/${draftId}`),
   reply: (id: string, r: BaReply) => post<{ ok: true; draftId?: string; to?: string[]; sent?: boolean; commented?: boolean }>(`/api/ba/mail/thread/${id}/reply`, r),
   delivery: (refresh?: boolean) => get<Cached<(BaRequirement & { projectId: number | null })[]> & { customers: BaCustomer[] }>(`/api/ba/delivery${qs(refresh)}`),
   qai: (projectId?: number | null) => get<{ questions: BaQaiQuestion[] }>(`/api/ba/qai${projectId ? `?project=${projectId}` : ""}`),
@@ -1769,3 +1805,18 @@ export const baApi = {
   qaiToday: (refresh?: boolean) => get<{ data: { author: string; text: string; at: string | null; fromQai: boolean }[]; error: string | null }>(`/api/ba/qai/today${qs(refresh)}`),
   qaiReplies: (id: number) => get<{ question: BaQaiQuestion }>(`/api/ba/qai/${id}/replies`),
 };
+
+// ── Claude sign-in (first run, Settings) ──────────────────────────────────────
+export type ClaudeAuthStatus = { loggedIn: boolean; email: string | null; orgName: string | null; subscription: string | null; method: string | null; error?: string | null };
+export type ClaudeLoginState = { running: boolean; url: string | null; done: boolean; ok: boolean; error: string | null };
+export const claudeAuthApi = {
+  get: () => get<{ status: ClaudeAuthStatus; login: ClaudeLoginState | null }>("/api/claude-auth"),
+  start: (opts: { email?: string; sso?: boolean } = {}) => post<{ login: ClaudeLoginState; status: ClaudeAuthStatus | null }>("/api/claude-auth/login", opts),
+  code: (code: string) => post<{ login: ClaudeLoginState; status: ClaudeAuthStatus | null }>("/api/claude-auth/login", { code }),
+  cancel: () => post<{ login: null }>("/api/claude-auth/login", { cancel: true }),
+  logout: () => post<{ status: ClaudeAuthStatus }>("/api/claude-auth/logout"),
+};
+
+export type WbSweepState = { available: boolean; run: { key: string; at: number; status: string; running: boolean } | null };
+
+export type WbViewAs = { id: string; name: string; email?: string | null };

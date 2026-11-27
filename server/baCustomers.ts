@@ -1,4 +1,7 @@
+import { join } from "node:path";
+import { cleanSnippet } from "./baMail.ts";
 import type { Database } from "bun:sqlite";
+import { handleWbRoute } from "./wb.ts";
 import {
   domainOf,
   domainsIn,
@@ -27,18 +30,22 @@ import {
 import { getAgent, startAgent } from "./agents.ts";
 import { baseFields, sessionDataShaper } from "./baDataShaper.ts";
 import { initSessionContext, recordSessionLink, sessionContext, threadIdIn } from "./baSessionContext.ts";
+import { adoptStrayDrawing, strayDrawings } from "./baSessionRules.ts";
+import { reconcileDrawings } from "./drawings.ts";
 import { lastQargoMcpStatus, mcpHowTo, qargoMcpStatus } from "./baQargoMcp.ts";
 import { cached, connectorCall, dropCache, FRONT_SEARCH, initConnector, markStale, NOTION_FETCH, NOTION_SELF, notionSql, parseJson, peekCache } from "./baConnector.ts";
 import { getBaFlags, getBaModels, getMailStyle, mailStyleBlock, setBaFlags, setBaModels, setMailStyle } from "./baEdition.ts";
 import { agenda } from "./baCalendar.ts";
 import { attachmentError, initAttachments, saveAttachments, savedFor } from "./baAttachments.ts";
 import { chooseFolderNative, createEntry, openFolder } from "./baFiles.ts";
-import { keyPoints, mailView, readThread, reply, suggestReply, threadAsText, warmMail } from "./baMail.ts";
+import { keyPoints, mailView, readDraft, readThread, reply, suggestReply, threadAsText, warmMail } from "./baMail.ts";
 import { handleFeedbackRoute } from "./baFeedback.ts";
 import { handlePublishedRoute } from "./baPublished.ts";
 import { askQai, composeQai, initQai, listQai, parseThread, qaiReplies, qaiToday } from "./baQai.ts";
-import { claudeShellCommand, SCRATCH_DIR } from "./paths.ts";
-import { createProject, ensureProjectFolder } from "./workspaces.ts";
+import { claudeShellCommand, IS_DEV_COPY, SCRATCH_DIR } from "./paths.ts";
+import { attachSession, createProject, ensureProjectFolder } from "./workspaces.ts";
+import { forgetThreadWorkspace, initMailWorkspace, setThreadWorkspace, threadsOfWorkspace, workspaceOfThread, workspaceOptions } from "./baMailWorkspace.ts";
+import { relative } from "node:path";
 
 /**
  * BA edition: customers built from the user's own deals in Notion, their
@@ -76,6 +83,7 @@ export function initBaCustomers(database: Database) {
   initQai(database);
   initAttachments(database);
   initSessionContext(database);
+  initMailWorkspace(database);
   // Keep the mailbox warm: first round shortly after boot, then every few minutes as
   // set in Settings (0: no background reads, only when you open the Inbox).
   let round = 0;
@@ -88,8 +96,11 @@ export function initBaCustomers(database: Database) {
     if (f.enabled && f.inbox) void warmMail(round++).catch(() => {});
     if (f.enabled && f.qargoMcp) void qargoMcpStatus().catch(() => {});
   };
-  setTimeout(warm, 20_000);
-  setInterval(warm, 60_000);
+  // The development copy reads mail when you open the Inbox, not in the background.
+  if (!IS_DEV_COPY) {
+    setTimeout(warm, 20_000);
+    setInterval(warm, 60_000);
+  }
   db.exec(`
     CREATE TABLE IF NOT EXISTS ba_deals (
       deal_url        TEXT PRIMARY KEY,
@@ -597,7 +608,7 @@ export function frontThreads(raw: string): BaFrontThread[] {
       emails: [...new Set(JSON.stringify(c).match(EMAIL_RE) ?? [])].slice(0, 20),
       assignee: str(c.assigneeName, c.assigneeAlias, c.assignee?.email, c.assignee?.username),
       tags: Array.isArray(c.tags) ? c.tags.map((t: any) => (typeof t === "string" ? t : t?.name)).filter(Boolean) : [],
-      snippet: str(last.blurb, c.blurb, last.text?.slice?.(0, 200)),
+      snippet: cleanSnippet(str(last.blurb, c.blurb, last.text?.slice?.(0, 2000))),
       updatedAt: time(c.updatedAt ?? c.waiting_since ?? last.created_at ?? c.updated_at ?? c.created_at),
       link: str(c.links?.app, c._links?.app) ?? `https://app.frontapp.com/open/${c.id}`,
     };
@@ -711,6 +722,7 @@ export function linkThread(t: BaFrontThread, projectId: number, irUrl: string | 
 export function unlinkThread(threadId: string) {
   db.query("DELETE FROM ba_thread_links WHERE thread_id = ?").run(threadId);
   db.query("DELETE FROM ba_contacts WHERE thread_id = ?").run(threadId);
+  forgetThreadWorkspace(threadId);
 }
 
 /** A customer's Front: threads triaged to them, plus a search for their name or domain. */
@@ -901,13 +913,15 @@ async function withMailFiles(a: BaAction, cloud: boolean): Promise<BaAction> {
   // A short wait: files that are quick to fetch are there when the session starts; the rest keep coming in the background.
   const result = await Promise.race([saveAttachments(id, placed.projectId, placed.irUrl), new Promise<null>((r) => setTimeout(() => r(null), 15_000))]).catch(() => null);
   const saved = savedFor(id);
-  const folder = ensureProjectFolder(placed.projectId);
-  const rel = saved.dir && folder ? saved.dir.slice(folder.length + 1) : null;
+  // A mail linked to a workspace starts its session in that workspace's folder: point there from it.
+  const ws = a.kind === "mail-session" ? workspaceOfThread(id) : null;
+  const folder = ws?.folder ?? ensureProjectFolder(placed.projectId);
+  const rel = saved.dir && folder ? relative(folder, saved.dir) : null;
   let note = "";
   if (saved.files.length && rel) {
     note = cloud
       ? `\n\nThe mail's attachments (${saved.files.join(", ")}) are saved on the user's Mac in the customer's folder under ${rel}; they are not in this cloud session.`
-      : `\n\nThe mail's attachments are saved in this folder under ./${rel}/: ${saved.files.join(", ")}. Open them when they matter.`;
+      : `\n\nThe mail's attachments are saved under ${rel.startsWith("..") ? rel : `./${rel}`}/ (relative to this folder): ${saved.files.join(", ")}. Open them when they matter.`;
   } else if (attachmentError()) {
     note = `\n\n(The mail's attachments could not be saved: ${attachmentError()})`;
   } else if (result === null && (th?.entries ?? []).some((e) => (e.files ?? []).length)) {
@@ -936,7 +950,9 @@ export function runAction(a: BaAction): { ok: true; key: string } | { ok: false;
   if (!built.ok) return built;
   // Production writes on the Qargo MCP are refused by auto mode's safety check, so a prod session asks you instead.
   const model = getBaModels().sessions;
-  const key = startAgent({ cwd: built.cwd, permissionMode: a.tenant === "prod" ? "default" : "auto", prompt: built.prompt, title: built.title, ...(model === "default" ? {} : { model }) });
+  // A mail linked to one of the customer's workspaces is worked on in that workspace.
+  const ws = a.kind === "mail-session" ? workspaceOfThread(threadIdIn(a.url)) : null;
+  const key = startAgent({ cwd: ws?.folder ?? built.cwd, permissionMode: a.tenant === "prod" ? "default" : "auto", prompt: built.prompt, title: built.title, ...(model === "default" ? {} : { model }) });
   // What the session works on, for the pane beside its chat.
   const threadId = threadIdIn(a.url);
   const isIr = !!a.url && /notion\.(so|com)/.test(a.url);
@@ -944,6 +960,7 @@ export function runAction(a: BaAction): { ok: true; key: string } | { ok: false;
   if (a.url && /notion\.(so|com)/.test(a.url)) {
     db.query("INSERT INTO ba_ir_sessions (ir_url, project_id, agent_key, kind, title, started_at) VALUES (?, ?, ?, ?, ?, ?)").run(a.url, a.projectId ?? null, key, a.kind, built.title, Date.now());
   }
+  if (ws) attachSession([key], ws.id);
   return { ok: true, key };
 }
 
@@ -986,7 +1003,7 @@ function buildAction(a: BaAction): { ok: true; cwd: string; title: string; promp
         (a.urls?.length ? `Only these integration requests belong on the diagram:\n${a.urls.map((u) => `- ${u}`).join("\n")}\n\n` : "") +
         `Draw ${name}'s integration landscape as an Excalidraw diagram. Read their integration requests in Notion (Customer Tasks whose Company is one of the deals below) ` +
         `and follow the Excalidraw styleguide in the professional-services:prof-svc-scoping skill (references/excalidraw.md) exactly. ` +
-        `Write it to ./drawings/${name.replace(/[\\/:*?"<>|]/g, "")}.excalidraw in this folder so it appears on the dashboard's Drawings page, then tell me to run Style check.${ctx}`,
+        `Write it to ${join(cwd, "drawings", name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "landscape")}.excalidraw (create the folder if needed) so it appears in the customer's Drawings on the dashboard, then tell me to run Style check.${ctx}`,
     },
     briefing: { title: `Briefing · ${name}`, prompt: `/qargo:pre-call-briefing\n\nBrief me for my next call with ${name}.${ctx}` },
     "ir-from-front": { title: `New IR · ${label}`, prompt: `/create-integration-request\n\nCreate an integration request for ${name} from this Front conversation: ${a.url}${a.prompt ? `\n\n${a.prompt}` : ""}${ctx}${mailText(a.url)}` },
@@ -1044,8 +1061,10 @@ function qaiContext(projectId: number | null, irUrl: string | null): string[] {
   const lines: string[] = [];
   if (c) {
     lines.push(`Customer: ${c.name}`);
-    const prod = [...new Set(c.deals.flatMap((d) => (d.productionUrls ?? "").split(/[\s,]+/)).filter((u) => u.startsWith("http")))];
-    const sandbox = [...new Set(c.deals.flatMap((d) => (d.sandboxUrls ?? "").split(/[\s,]+/)).filter((u) => u.startsWith("http")))];
+    // Deals hold tenant names ("fsew-sandbox") or links; Qai needs the full link to act.
+    const links = (v: string | null | undefined) => (v ?? "").split(/[\s,]+/).map((u) => u.trim()).filter((u) => /^https?:\/\//.test(u) || /^[a-z0-9][a-z0-9-]*$/i.test(u)).map((u) => (u.startsWith("http") ? u : `https://app.qargo.com/${u}`));
+    const prod = [...new Set(c.deals.flatMap((d) => links(d.productionUrls)))];
+    const sandbox = [...new Set(c.deals.flatMap((d) => links(d.sandboxUrls)))];
     if (prod.length) lines.push(`Production: ${prod.slice(0, 3).join(" ")}`);
     if (sandbox.length) lines.push(`Sandbox: ${sandbox.slice(0, 3).join(" ")}`);
   }
@@ -1078,13 +1097,19 @@ export async function handleBaRoute(req: Request, url: URL): Promise<Response | 
     if (published) return published;
     const feedback = await handleFeedbackRoute(req, url);
     if (feedback) return feedback;
+    if (getBaFlags().workbench) {
+      const wb = await handleWbRoute(req, url);
+      if (wb) return wb;
+    }
 
     if (p === "/api/ba/agenda") return json(await agenda(Number(url.searchParams.get("days") ?? 2), refresh, listCustomers()));
     if (p === "/api/ba/mail") {
       const view = (url.searchParams.get("view") ?? "inbox") as import("../shared/baCustomers.ts").BaMailView;
-      if (!["inbox", "mentions", "following", "placed"].includes(view)) return json({ error: "unknown view" }, 400);
+      if (!["inbox", "assigned", "subscribed", "mentions", "drafts", "placed"].includes(view)) return json({ error: "unknown view" }, 400);
       return json(await mailView(view, refresh));
     }
+    const draftId = p.match(/^\/api\/ba\/mail\/draft\/(msg_[A-Za-z0-9]+)$/);
+    if (draftId) return json(await readDraft(draftId[1]!));
     const threadId = p.match(/^\/api\/ba\/mail\/thread\/(cnv_[A-Za-z0-9]+)(\/reply)?$/);
     if (threadId) {
       if (threadId[2] && req.method === "POST") {
@@ -1235,6 +1260,13 @@ export async function handleBaRoute(req: Request, url: URL): Promise<Response | 
       if (p.endsWith("/requirements")) return json(await requirements(id, refresh));
       if (p.endsWith("/front")) return json(await customerFront(id, refresh));
       if (p.endsWith("/slack")) return json(await customerSlack(id, refresh));
+      if (p.endsWith("/stray-drawings") && req.method === "GET") return json({ drawings: strayDrawings(id) });
+      if (p.endsWith("/stray-drawings") && req.method === "POST") {
+        const r = adoptStrayDrawing(id, (await body<{ path?: string }>())?.path ?? "");
+        if (!r.ok) return json(r, 400);
+        reconcileDrawings();
+        return json(r);
+      }
       if (req.method === "GET") return json({ customer: getCustomer(id) });
       if (req.method === "PUT") {
         const b = await body<{ frontQuery?: string; extraDomains?: string }>();
@@ -1264,6 +1296,23 @@ export async function handleBaRoute(req: Request, url: URL): Promise<Response | 
       if (b.projectId) markStale(`p${b.projectId}:requirements`);
       markStale("taskindex");
       return json({ ok: true });
+    }
+    if (p === "/api/ba/mail-workspace") {
+      const thread = url.searchParams.get("thread") ?? "";
+      if (req.method === "POST") {
+        const b = await body<{ threadId?: string; workspaceId?: number | null; projectId?: number; thread?: BaFrontThread }>();
+        if (!b?.threadId) return json({ error: "thread required" }, 400);
+        // A mail the customer page only found by search is placed at the customer first.
+        if (!placementOf(b.threadId) && b.workspaceId && b.projectId && b.thread?.id === b.threadId) linkThread(b.thread, b.projectId, null, "manual");
+        const r = setThreadWorkspace(b.threadId, b.workspaceId ?? null);
+        return r.ok ? json(r) : json({ error: r.error }, 400);
+      }
+      const project = Number(url.searchParams.get("project")) || placementOf(thread)?.projectId || null;
+      return json({ workspaceId: workspaceOfThread(thread)?.id ?? null, workspaces: project ? workspaceOptions(project) : [] });
+    }
+    if (p === "/api/ba/workspace-mail") {
+      const r = threadsOfWorkspace(Number(url.searchParams.get("workspace")));
+      return r ? json(r) : json({ error: "no such workspace" }, 404);
     }
     if (p === "/api/ba/triage" && req.method === "DELETE") {
       unlinkThread(url.searchParams.get("thread") ?? "");

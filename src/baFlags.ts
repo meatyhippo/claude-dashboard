@@ -63,5 +63,5 @@ export const T = baFlags.customers
   : { Projects: "Projects", Project: "Project", projects: "projects", project: "project", newProject: "New project" };
 
 /** Pages that only exist with their switch on. */
-export const BA_PAGE_FLAG: Record<string, keyof BaFlags> = { inbox: "inbox", delivery: "delivery", qai: "qai" };
+export const BA_PAGE_FLAG: Record<string, keyof BaFlags> = { inbox: "inbox", delivery: "delivery", workbench: "workbench", qai: "qai" };
 export const baPageOn = (key: string) => !(key in BA_PAGE_FLAG) || baFlags[BA_PAGE_FLAG[key]!];

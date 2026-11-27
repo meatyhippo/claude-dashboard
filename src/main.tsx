@@ -1,5 +1,6 @@
 import { createRoot } from "react-dom/client";
 import App from "./App.tsx";
+import { SignInGate } from "./components/ClaudeSignIn.tsx";
 import "./styles.css";
 import { installWindowActivity } from "./windowActivity.ts";
 
@@ -14,4 +15,21 @@ if ("dashboardShell" in window) {
 }
 installWindowActivity();
 
-createRoot(document.getElementById("root")!).render(<App />);
+// The development copy (vite, beside the installed app): marked so it is never taken for the live one.
+if (import.meta.env.DEV) {
+  document.documentElement.dataset.devCopy = "1";
+  const mark = () => !document.title.startsWith("DEV · ") && (document.title = `DEV · ${document.title}`);
+  mark();
+  new MutationObserver(mark).observe(document.querySelector("title") ?? document.head, { childList: true, subtree: true, characterData: true });
+  const tag = document.createElement("div");
+  tag.className = "dev-copy-tag";
+  tag.textContent = "DEV";
+  tag.title = "Development copy: no background jobs, its own data. Your live app runs separately.";
+  document.body.appendChild(tag);
+}
+
+createRoot(document.getElementById("root")!).render(
+  <SignInGate>
+    <App />
+  </SignInGate>,
+);

@@ -7,6 +7,12 @@ import { projectFileId } from "../shared/projectFiles.ts";
 
 /** Our own state, deliberately outside ~/.claude so we never corrupt Claude Code. */
 export const DATA_DIR = process.env.DASHBOARD_HOME ?? join(homedir(), ".claude-dashboard");
+/**
+ * The development copy beside the installed app (scripts/dev-beside.sh). It runs no background
+ * job that writes or notifies (Notion saves, Front auto-links, Qai polling, reminders): the
+ * installed app already does those, and two of each would clash. What you click still acts.
+ */
+export const IS_DEV_COPY = process.env.DASHBOARD_BESIDE === "1";
 export const DB_PATH = join(DATA_DIR, "index.db");
 
 const DEFAULT_CLAUDE_HOME = join(homedir(), ".claude");

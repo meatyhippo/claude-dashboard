@@ -61,19 +61,29 @@ export const listQai = (projectId?: number | null): BaQaiQuestion[] =>
     : db.query<Row, []>("SELECT * FROM ba_qai ORDER BY asked_at DESC LIMIT 200").all()
   ).map(toQuestion);
 
+/** Where a just-sent Slack message is: {"message_link": ".../archives/D…/p…", "message_context": {"message_ts", "channel_id"}}. */
+function sentRef(raw: string): { link: string | null; channel: string | null; ts: string | null } {
+  const parsed = parseJson(raw);
+  const plain = raw.replace(/\\\//g, "/");
+  const link: string | null = (typeof parsed?.message_link === "string" && parsed.message_link) || (typeof parsed?.permalink === "string" && parsed.permalink) || plain.match(/https:\/\/[\w.-]+\.slack\.com\/archives\/[\w/]+p\d+[^\s"')]*/)?.[0] || null;
+  const ctx = parsed?.message_context ?? {};
+  const channel = (typeof ctx.channel_id === "string" && ctx.channel_id) || link?.match(/archives\/([A-Z0-9]+)/)?.[1] || null;
+  const ts =
+    (typeof ctx.message_ts === "string" && ctx.message_ts) ||
+    (typeof parsed?.ts === "string" && parsed.ts) ||
+    (typeof parsed?.message_ts === "string" && parsed.message_ts) ||
+    (link?.match(/p(\d{10})(\d{6})/) ? link.replace(/.*p(\d{10})(\d{6}).*/, "$1.$2") : null) ||
+    plain.match(/\b(\d{10}\.\d{6})\b/)?.[1] ||
+    null;
+  return { link, channel, ts };
+}
+
 export async function askQai(q: { question: string; message: string; projectId?: number | null; irUrl?: string | null }): Promise<BaQaiQuestion> {
   // "@Qai" as typed or shown in the preview becomes the real mention; a message without one gets it in front.
   q = { ...q, message: q.message.replace(/(^|\s)@qai\b/gi, `$1<@${QAI_USER}>`) };
   if (!q.message.includes(`<@${QAI_USER}>`)) q = { ...q, message: `<@${QAI_USER}> ${q.message.trim()}` };
   const raw = await connectorCall(SEND, { channel_id: QAI_CHANNEL, message: q.message }, "Post the user's previewed question to Qai in #ps_troubleshooting.");
-  const parsed = parseJson(raw);
-  const permalink: string | null = (typeof parsed?.permalink === "string" && parsed.permalink) || raw.match(/https:\/\/[\w.-]+\.slack\.com\/archives\/[\w/]+p\d+[^\s"')]*/)?.[0] || null;
-  const ts: string | null =
-    (typeof parsed?.ts === "string" && parsed.ts) ||
-    (typeof parsed?.message_ts === "string" && parsed.message_ts) ||
-    (permalink?.match(/p(\d{10})(\d{6})/) ? permalink.replace(/.*p(\d{10})(\d{6}).*/, "$1.$2") : null) ||
-    raw.match(/\b(\d{10}\.\d{6})\b/)?.[1] ||
-    null;
+  const { link: permalink, ts } = sentRef(raw);
   const id = Number(
     db
       .query("INSERT INTO ba_qai (project_id, ir_url, question, message, ts, permalink, asked_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
@@ -119,4 +129,45 @@ export async function qaiToday(refresh: boolean): Promise<{ data: BaQaiMessage[]
   const local = new Date().toLocaleDateString("sv-SE"); // YYYY-MM-DD in local time
   const data = (res.data ?? []).filter((m) => (m.at ?? "").startsWith(local) || (m.at ?? "").startsWith(today)).filter((m) => !isSlackNoise(m.text)).filter((m) => /qai/i.test(m.text) || m.fromQai);
   return { data, error: res.error };
+}
+
+// ── Asking Qai in DM from a session, and waiting for the answer ──────────────
+
+/** When Slack's send result does not name the DM channel: Slack reads a DM by the other person's user id too. */
+const QAI_DM_FALLBACK = QAI_USER;
+
+/**
+ * Qai's final answer in a DM thread, or null while it is still working. Qai first posts
+ * progress notes ("Working…", "acquired access to Qargo"); only its answer ends with the
+ * "sent by qai … open in session" footer, so that footer is what makes a reply final.
+ */
+export function qaiAnswer(raw: string): string | null {
+  const parsed = parseJson(raw);
+  const text: string = typeof parsed?.messages === "string" ? parsed.messages : raw;
+  const foot = [...text.matchAll(/^.*sent by <[^>]*qai[^\n]*$/gim)].pop();
+  if (!foot || foot.index === undefined) return null;
+  const before = text.slice(0, foot.index);
+  // The answer starts at the last Qai message header before the footer.
+  const starts = [...before.matchAll(/(^|\n)(>\s*)?Qai:\s?|(^|\n)From: Qai[^\n]*\n(Time:[^\n]*\n)?(Message TS:[^\n]*\n)?/gi)];
+  const start = starts.length ? starts[starts.length - 1]!.index! + starts[starts.length - 1]![0].length : 0;
+  const out = before
+    .slice(start)
+    .split("\n")
+    .map((l) => l.replace(/^>\s?/, ""))
+    .join("\n")
+    .trim();
+  return out || null;
+}
+
+/** Post a question to Qai in your DM with it. Where it landed, to read the answer from later. */
+export async function sendQaiDm(message: string): Promise<{ link: string | null; channel: string; ts: string | null }> {
+  const raw = await connectorCall(SEND, { channel_id: QAI_USER, message }, "Ask Qai, Qargo's codebase bot, a backend question from a dashboard session, in the user's DM with it.");
+  const { link, channel, ts } = sentRef(raw);
+  return { link, channel: channel || QAI_DM_FALLBACK, ts };
+}
+
+/** Qai's final answer to one DM question, or null while it is still working. */
+export async function readQaiAnswer(channel: string, ts: string): Promise<string | null> {
+  const thread = await connectorCall(READ_THREAD, { channel_id: channel, message_ts: ts, response_format: "concise" }, "Check whether Qai answered the question it was asked.").catch(() => "");
+  return thread ? qaiAnswer(thread) : null;
 }

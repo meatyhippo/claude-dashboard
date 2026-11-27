@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync,
 import { join, sep } from "node:path";
 import { claudeEnv, DATA_DIR } from "./paths.ts";
 import { scanCommands } from "./commands.ts";
+import { baSessionRules } from "./baSessionRules.ts";
+import { getBaFlags } from "./baEdition.ts";
 import {
   query,
   renameSession,
@@ -78,7 +80,8 @@ export type TimelineItem = (
       /** The turn's JSON answer, for a session started with an output schema. */
       structured?: unknown;
     }
-  | { kind: "error"; ts: number; text: string }
+  | { kind: "error"; ts: number; text: string; /** Connectors this session needs signed in again, offered as buttons. */ connect?: string[] }
+  | { kind: "notice"; ts: number; text: string }
 ) & { agentId?: string };
 
 /**
@@ -115,6 +118,8 @@ type Pending = {
 };
 
 type Agent = {
+  /** The last message sent, to resend once when the CLI swallows it right after a stop. */
+  lastSent?: { text: string; images: InboundImage[]; at: number; resent: boolean };
   key: string;
   sessionId: string | null;
   cwd: string;
@@ -373,6 +378,48 @@ export function listAgents() {
   return [...agents.values()].sort((a, b) => b.updatedAt - a.updatedAt).map(agentSummary);
 }
 
+/**
+ * A connector signed in after a chat started (Qargo MCP drops its sign-in every day) is
+ * reconnected inside the running chat: same process, same conversation, its tools back.
+ * Chats mid-turn are done when their turn ends. With `only`, just that chat.
+ */
+const reconnectLater = new Map<string, Set<string>>();
+export async function reconnectConnector(name: string, only?: string): Promise<{ key: string; ok: boolean; tools: number; error?: string }[]> {
+  const out: { key: string; ok: boolean; tools: number; error?: string }[] = [];
+  const status = async (a: Agent) => ((await a.q.mcpServerStatus()) as { name: string; status: string; tools?: unknown[] }[]).find((sv) => sv.name === name);
+  const count = (sv: { tools?: unknown[] } | undefined) => (Array.isArray(sv?.tools) ? sv!.tools!.length : 0);
+  for (const a of agents.values()) {
+    if (only && a.key !== only) continue;
+    if (a.status === "ended" || a.status === "error" || a.status === "starting") continue;
+    if (a.status === "thinking" || a.status === "awaiting-permission") {
+      reconnectLater.set(a.key, new Set([...(reconnectLater.get(a.key) ?? []), name]));
+      continue;
+    }
+    try {
+      const before = await status(a);
+      if (!before) continue; // this chat does not load that connector
+      if (before.status === "connected" && count(before) > 0) continue;
+      await a.q.reconnectMcpServer(name);
+      const after = await status(a);
+      const ok = after?.status === "connected" && count(after) > 0;
+      out.push({ key: a.key, ok, tools: count(after) });
+      console.log(`[mcp] ${a.title ?? a.cwd}: reconnected ${name} → ${after?.status ?? "?"} (${count(after)} tools)`);
+      if (ok) append(a, { kind: "notice", ts: Date.now(), text: `✓ ${name.replace(/^claude\.ai /, "")} is connected again in this chat (${count(after)} tools). Carry on: no restart needed.` });
+    } catch (e) {
+      out.push({ key: a.key, ok: false, tools: 0, error: (e as Error)?.message });
+    }
+  }
+  return out;
+}
+
+/** A running session's connectors as the CLI sees them now: name, status, tool count. */
+export async function agentConnectors(key: string): Promise<{ name: string; status: string; tools: number; error?: string }[] | null> {
+  const a = agents.get(key);
+  if (!a) return null;
+  const list = (await a.q.mcpServerStatus().catch(() => [])) as { name: string; status: string; error?: string; tools?: unknown[] }[];
+  return list.map((sv) => ({ name: sv.name, status: sv.status, tools: Array.isArray(sv.tools) ? sv.tools.length : 0, ...(sv.error ? { error: sv.error } : {}) }));
+}
+
 export function getAgent(key: string) {
   const a = agents.get(key);
   if (!a) return null;
@@ -397,6 +444,12 @@ function touch(a: Agent, status?: AgentStatus) {
   // still emits its result, which would otherwise flip the status back to idle.
   const settled = a.endedAt !== null;
   if (status && (!settled || status === "ended" || status === "error")) a.status = status;
+  // A connector signed in while this chat was mid-turn: reconnect it now the turn is over.
+  if (a.status === "idle" && reconnectLater.has(a.key)) {
+    const names = reconnectLater.get(a.key)!;
+    reconnectLater.delete(a.key);
+    for (const n of names) void reconnectConnector(n, a.key);
+  }
   if (a.sessionId) saveRestorable();
   emitRoster();
 }
@@ -565,6 +618,66 @@ function userMessage(
 }
 
 // ── lifecycle ─────────────────────────────────────────────────────────────────
+/**
+ * The org's plugins (engineering, qargo, success, professional-services…) as the Claude
+ * desktop app syncs them from the claude.ai catalog. The CLI the SDK spawns never sees
+ * that catalog, so without these `/professional-services:prof-svc-scoping` and friends
+ * are "Unknown command". Newest sync wins; read fresh per session so a re-sync counts.
+ */
+export function orgPlugins(): { type: "local"; path: string }[] {
+  const root = join(process.env.HOME ?? "", "Library", "Application Support", "Claude", "local-agent-mode-sessions");
+  let best: { dir: string; at: number } | null = null;
+  try {
+    for (const a of readdirSync(root))
+      for (const b of readdirSync(join(root, a))) {
+        const rpm = join(root, a, b, "rpm");
+        try {
+          const at = statSync(join(rpm, "manifest.json")).mtimeMs;
+          if (!best || at > best.at) best = { dir: rpm, at };
+        } catch {
+          /* no synced plugins here */
+        }
+      }
+  } catch {
+    return [];
+  }
+  if (!best) return [];
+  const dir = best.dir;
+  return readdirSync(dir)
+    .filter((n) => n.startsWith("plugin_") && existsSync(join(dir, n, ".claude-plugin", "plugin.json")))
+    .map((n) => ({ type: "local" as const, path: join(dir, n) }))
+    .concat(skillsPlugin() ? [{ type: "local" as const, path: skillsPlugin()! }] : []);
+}
+
+/**
+ * The Claude desktop app's own skills plugin ("anthropic-skills": my-writing-style and
+ * the rest), synced beside the org plugins. The newest copy wins.
+ */
+export function skillsPlugin(): string | null {
+  const root = join(process.env.HOME ?? "", "Library", "Application Support", "Claude", "local-agent-mode-sessions", "skills-plugin");
+  let best: { dir: string; at: number } | null = null;
+  try {
+    for (const a of readdirSync(root))
+      for (const b of readdirSync(join(root, a))) {
+        const dir = join(root, a, b);
+        try {
+          const at = statSync(join(dir, ".claude-plugin", "plugin.json")).mtimeMs;
+          if (!best || at > best.at) best = { dir, at };
+        } catch {
+          /* not a plugin */
+        }
+      }
+  } catch {
+    return null;
+  }
+  return best?.dir ?? null;
+}
+
+/** Every session (but research) gets this on top of Claude Code's own system prompt. */
+export const DRAFT_RULE =
+  "Whenever you draft an email, a Front reply or any message the user sends as themself, first load their writing-style skill if they have one (anthropic-skills:my-writing-style) and follow it. " +
+  "Never end such a draft with a sign-off (\"Kind regards\", \"Best\", \"Thanks\" as a closing line) or their name: Front adds their signature, so the draft ends with its last sentence.";
+
 export type StartOptions = {
   cwd: string;
   /** Start with no project context — see RESEARCH_OPTIONS. */
@@ -621,6 +734,20 @@ const RESEARCH_OPTIONS: Pick<Options, "settingSources" | "skills" | "disallowedT
 };
 
 /**
+ * BA edition: a research chat that keeps the org's skills. Same tool fence, but the
+ * skill catalogue stays (no `skills: []`), so the qargo / professional-services
+ * skills are offered and listed in the chat's / menu.
+ */
+const RESEARCH_WITH_SKILLS: Pick<Options, "settingSources" | "disallowedTools"> = {
+  settingSources: RESEARCH_OPTIONS.settingSources,
+  disallowedTools: RESEARCH_OPTIONS.disallowedTools,
+};
+const baChatSkills = () => {
+  const f = getBaFlags();
+  return f.enabled && f.chatSkills;
+};
+
+/**
  * The name a session already goes by. Resuming starts a new agent record, and the
  * CLI ignores `title` on resume, so without this a resume from a caller that does
  * not re-supply the name comes back nameless and the views fall back to its path.
@@ -670,12 +797,13 @@ export function startAgent(opts: StartOptions): string {
     q: null as unknown as Query,
   };
 
+  const researchWithSkills = opts.research === true && baChatSkills();
   agent.q = query({
     prompt: queue,
     options: {
       env: claudeEnv(),
       cwd: opts.cwd,
-      ...(opts.research ? RESEARCH_OPTIONS : {}),
+      ...(opts.research ? (researchWithSkills ? RESEARCH_WITH_SKILLS : RESEARCH_OPTIONS) : {}),
       model: opts.model,
       permissionMode: opts.permissionMode ?? "default",
       // The CLI refuses bypassPermissions unless it was allowed at spawn time, so
@@ -688,6 +816,10 @@ export function startAgent(opts: StartOptions): string {
       title: opts.title?.trim() || undefined,
       allowedTools: opts.allowedTools,
       mcpServers: opts.mcpServers,
+      // Research sessions are deliberately bare; every other one gets the org's skills.
+      // BA edition (flag chatSkills): a chat without a folder gets them as well.
+      plugins: opts.research && !researchWithSkills ? undefined : orgPlugins(),
+      ...(opts.research ? {} : { systemPrompt: { type: "preset" as const, preset: "claude_code" as const, append: DRAFT_RULE + baSessionRules(opts.cwd) } }),
       outputFormat: opts.outputSchema ? { type: "json_schema", schema: opts.outputSchema } : undefined,
       includePartialMessages: true,
       // Without these a Task call is an opaque tool row: the first forwards the
@@ -716,6 +848,10 @@ export function startAgent(opts: StartOptions): string {
       agent.models = m;
       cacheModels(m);
       emit("agent-models", { key, models: m });
+      // The CLI only sends `system init` after the first user message, so a session
+      // opened without a prompt (Workbench "Chat") would sit in "starting" and show
+      // "working" forever. The initialize handshake answering means it is ready.
+      if (agent.status === "starting") touch(agent, "idle");
     })
     .catch(() => {});
   void agent.q
@@ -893,6 +1029,39 @@ function resultError(msg: any): string {
   return msg.subtype && msg.subtype !== "success" ? msg.subtype : "The turn ended with an error";
 }
 
+/**
+ * Which connectors this session really got: logged per session, and said in the chat
+ * when the Qargo connector is there without tools or not connected. "Connected" in
+ * Settings only means the sign-in works; whether the session gets the tools shows
+ * here. claude.ai connectors attach after start-up, so this asks the SDK a little later.
+ */
+const connectorChecked = new WeakSet<object>();
+function checkConnectors(agent: Agent) {
+  if (connectorChecked.has(agent)) return;
+  connectorChecked.add(agent);
+  setTimeout(async () => {
+    let servers: { name: string; status: string; error?: string; tools?: unknown[] }[] = [];
+    try {
+      servers = (await agent.q.mcpServerStatus()) as typeof servers;
+    } catch {
+      return; // the session already ended
+    }
+    const n = (sv: (typeof servers)[number]) => (Array.isArray(sv.tools) ? sv.tools.length : 0);
+    console.log(`[mcp] ${agent.title ?? agent.cwd}: ${servers.map((sv) => `${sv.name}=${sv.status}(${n(sv)})`).join(" ") || "no servers"}`);
+    // Only the production connector matters: qargo-mcp-test is for the few who use it, and
+    // its sign-in state must never raise a warning.
+    const qargo = servers.filter((sv) => /qargo-mcp-prod/i.test(sv.name));
+    if (!qargo.length || qargo.some((sv) => sv.status === "connected" && n(sv) > 0)) return;
+    const why = qargo.map((sv) => `${sv.name.replace(/^claude\.ai /, "")}: ${sv.status}${sv.status === "connected" ? ", 0 tools" : sv.error ? ` (${sv.error})` : ""}`).join("; ");
+    append(agent, {
+      kind: "error",
+      ts: Date.now(),
+      text: `This chat has no Qargo tools (${why}). Claude Code keeps its own sign-in to each connector, apart from the Claude app and claude.ai: sign in below: the chat picks the tools up by itself, with its conversation intact.`,
+      connect: qargo.filter((sv) => sv.status !== "connected" || n(sv) === 0).map((sv) => sv.name),
+    });
+  }, 20_000);
+}
+
 /** Drain the SDK's message stream into the timeline the browser renders. */
 async function consume(agent: Agent) {
   try {
@@ -910,6 +1079,7 @@ async function consume(agent: Agent) {
             break;
           }
           if (anyMsg.subtype === "init") {
+            checkConnectors(agent);
             if (anyMsg.model) agent.model = anyMsg.model;
             if (anyMsg.permissionMode) agent.permissionMode = anyMsg.permissionMode;
             touch(agent, agent.status === "starting" ? "idle" : agent.status);
@@ -996,6 +1166,16 @@ async function consume(agent: Agent) {
         }
 
         case "result": {
+          // Right after a stop the CLI can end the next turn at once without running it
+          // ("[ede_diagnostic] result_type=user …", $0, no reply). Send that message
+          // again, once, instead of showing an error the person has to work around.
+          const ls = agent.lastSent;
+          if (anyMsg.is_error && /ede_diagnostic/.test(resultError(anyMsg)) && !(anyMsg.total_cost_usd > 0) && ls && !ls.resent && Date.now() - ls.at < 120_000) {
+            ls.resent = true;
+            agent.push(userMessage(ls.text, ls.images));
+            touch(agent, "thinking");
+            break;
+          }
           for (const i of agent.timeline) {
             if (i.kind !== "user" || !i.queued) continue;
             delete i.queued;
@@ -1081,6 +1261,7 @@ export function sendMessage(key: string, text: string, images: InboundImage[] = 
     ...(images.length ? { images: images.map(persistImage) } : {}),
   });
   a.push(userMessage(text, images, busy ? "next" : undefined, uuid));
+  a.lastSent = { text, images, at: Date.now(), resent: false };
   if (a.suggestion) {
     a.suggestion = null;
     emit("agent-suggestion", { key, suggestion: null });
@@ -1280,6 +1461,17 @@ export async function stopAgent(key: string, reason = "ended from the dashboard"
  * worktree that has since been removed would otherwise reach the SDK as a spawn into
  * nowhere, failing somewhere far less legible than here.
  */
+/**
+ * A session that belongs to a feature with its own tools (a Workbench ticket chat)
+ * is resumed by that feature, so it gets its tools and stays the ticket's session.
+ * Returns the new key, or null when the folder is not that feature's.
+ */
+type RestoreHook = (cwd: string, sessionId: string) => string | null;
+const restoreHooks: RestoreHook[] = [];
+export function onRestore(hook: RestoreHook) {
+  restoreHooks.push(hook);
+}
+
 export function restoreAgent(
   sessionId: string,
   defaults: { model?: string; permissionMode?: PermissionMode } = {},
@@ -1288,6 +1480,10 @@ export function restoreAgent(
   if (!row) return { error: "unknown session" };
   if (!existsSync(row.cwd))
     return { error: `${row.cwd} no longer exists — the worktree or folder it ran in is gone` };
+  for (const hook of restoreHooks) {
+    const key = hook(row.cwd, sessionId);
+    if (key) return { key };
+  }
   return {
     key: startAgent({
       cwd: row.cwd,
@@ -1378,6 +1574,11 @@ export async function restartAgent(key: string): Promise<{ key: string } | { err
   if (!existsSync(cwd)) return { error: `${cwd} no longer exists` };
   if (a.status !== "ended" && a.status !== "error") await stopAgent(key, "restarted from the dashboard");
   forgetAgent(key);
+  // A feature's own session (a Workbench ticket chat) comes back through that feature, with its tools.
+  for (const hook of restoreHooks) {
+    const k = hook(cwd, sessionId);
+    if (k) return { key: k };
+  }
   return {
     key: startAgent({
       cwd,

@@ -4,6 +4,7 @@ import { BA_REFRESH_CHOICES, DEFAULT_BA_FLAGS, DEFAULT_BA_MODELS, type BaFlags, 
 import { blankSchedule, blankTemplate, type Template } from "../shared/templates.ts";
 import { CLAUDE_HOME, DATA_DIR } from "./paths.ts";
 import { getSettings, updateSettings } from "./settings.ts";
+import { skillsPlugin } from "./agents.ts";
 
 /**
  * BA edition: the dashboard set up for a solution architect / business analyst
@@ -70,7 +71,7 @@ export const BA_TEMPLATES: Template[] = [
       "3. Follow the Excalidraw styleguide in the professional-services:prof-svc-scoping skill (references/excalidraw.md) exactly: Qargo (TMS) centred in green #ebfbee; customer stack left, third parties right; rounded rectangles with the name inside; " +
       "fills: out-of-the-box red #ffc9c9 (accounting #ffc9c9, FMS/telematics #ff8787, orders/visibility #fa5252), custom request orange #ffa94d, customer middleware lila #9775fa, customer API/EDI blue #a5d8ff; " +
       "arrows bound to both blocks, labelled 'description\\n(transport)' using the Notion flow names and numbers, solid = confirmed, dotted = unconfirmed, stroke #1e1e1e working / #e8590c in development / #40c057 tested; strokeWidth 1; hand-drawn font.\n" +
-      "4. Write it to ./drawings/<Customer name>.excalidraw in this folder (create the folder if needed), so it shows up in the dashboard's Drawings page. Then tell me to run Style check on it.",
+      "4. Write it to drawings/<customer-name>.excalidraw in the customer's own folder (not a workspace subfolder inside it; create drawings/ if needed), so it shows up in the customer's Drawings on the dashboard. Then tell me to run Style check on it.",
   }),
   template("ba-morning-inbox", {
     name: "Morning inbox",
@@ -142,7 +143,17 @@ export function mailStyleBlock(): string {
   } catch {
     /* unreadable: the dashboard's own copy still applies */
   }
+  let skill = "";
+  try {
+    const dir = skillsPlugin();
+    const f = dir && join(dir, "skills", "my-writing-style", "SKILL.md");
+    if (f && existsSync(f)) skill = readFileSync(f, "utf8").replace(/^---[\s\S]*?---\s*/, "").trim().slice(0, 12000);
+  } catch {
+    /* no skill synced: the rest still applies */
+  }
   const parts = [
+    "Never end the draft with a sign-off (\"Kind regards\", \"Best\", \"Thanks\" as a closing line) or my name: Front adds my signature, so the draft ends with its last sentence.",
+    skill && `My writing style (the my-writing-style skill, follow it):\n${skill}`,
     own && `How I want my emails written (these win over any default):\n${own}`,
     global && `My general instructions for Claude (follow the parts about writing):\n${global}`,
   ].filter(Boolean);

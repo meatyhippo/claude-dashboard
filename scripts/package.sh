@@ -136,6 +136,8 @@ mkdir -p "$STAGE"
 # An explicit allowlist, so a stray file in the working tree can never ride along.
 COPY=(
   README.md
+  BA-EDITION.md
+  .claude
   install.sh
   start.sh
   package.json

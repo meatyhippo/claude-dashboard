@@ -7,6 +7,7 @@ import { baApi } from "../api.ts";
 import { ago, useAction } from "./CustomerPanels.tsx";
 import { StatusPill } from "./StatusPill.tsx";
 import { RunWhere } from "./RunWhere.tsx";
+import { MailWorkspacePicker } from "./MailWorkspace.tsx";
 
 /**
  * BA edition: what is going on at one customer, at a glance. The latest mail, the
@@ -144,9 +145,12 @@ export default function CustomerOverview({ projectId, onOpen, onTab }: { project
                 <span className="ba-muted">{[m.from, ago(m.updatedAt)].filter(Boolean).join(" · ")}</span>
                 {m.snippet && <span className="co-snippet">{cleanMail(m.snippet).text.slice(0, 160)}</span>}
               </div>
-              <button className="icon-btn" onClick={() => void run("mail-session", { projectId, url: m.link, label: m.subject })}>
-                Session
-              </button>
+              <span className="co-item-actions">
+                <MailWorkspacePicker thread={m} projectId={projectId} />
+                <button className="icon-btn" onClick={() => void run("mail-session", { projectId, url: m.link, label: m.subject })}>
+                  Session
+                </button>
+              </span>
             </div>
           ))}
         </section>
